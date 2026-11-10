@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0 (unreleased)
+## 0.1 (10 November 2026)
 
-First version.
+First release.
 
 ### Pictures
 - My circle: three rings that turn at their own pace, a strand to each person, and messages travelling along the strands at the pace you really reply. Drag to spin, or drag someone to another ring.
