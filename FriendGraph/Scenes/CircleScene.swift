@@ -81,7 +81,8 @@ final class CircleScene: VisualScene {
         return 19 + 23 * pow(1 - u, 1.3)
     }
     private func distance(_ b: Body) -> Double { hypot(b.x - cx, b.y - cy) }
-    private var selected: Int? { grabbed ?? hovered }
+    private var pinned: Int?
+    private var selected: Int? { grabbed ?? hovered ?? pinned }
 
     private func body(at p: CGPoint) -> Int? {
         var best: Int?
@@ -152,7 +153,7 @@ final class CircleScene: VisualScene {
     }
 
     /// Selects someone without a pointer, for saved pictures and tests.
-    func select(index: Int?) { hovered = index.flatMap { $0 < bodies.count ? $0 : nil } }
+    func select(index: Int?) { pinned = index.flatMap { $0 < bodies.count ? $0 : nil } }
 
     // MARK: Words
 

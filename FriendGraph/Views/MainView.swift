@@ -118,6 +118,10 @@ struct MainView: View {
             circle.select(index: index)
             refresh(circle)
         }
+        if let at = CommandLine.arguments.firstIndex(of: "--strand"), at + 1 < CommandLine.arguments.count, let iris = made[.iris] as? IrisScene {
+            iris.select(named: CommandLine.arguments[at + 1])
+            if model.tab == .iris { refresh(iris) }
+        }
     }
 
     private func refresh(_ scene: any VisualScene) {

@@ -148,6 +148,7 @@ final class JourneyScene: VisualScene {
         var light = g
         light.blendMode = .plusLighter
         let step = trail / 150
+        var heads: [(Int, Double, Double, Double, Double, RGB)] = []
         for p in faces.indices.reversed() {
             let colour = Pal.series[p % Pal.series.count]
             let rest = Double(last[p]) + 3
@@ -176,8 +177,22 @@ final class JourneyScene: VisualScene {
                 if ease > 0.5 { c = Pal.memory }
             }
             light.glow(px, py, r * 4.5, c, 0.45 * alpha)
-            head(&g, faces[p], px, py, r, alpha, c, options)
+            heads.append((p, px, py, r, alpha, c))
         }
+        // Faces that land on top of each other are eased apart, away from my line, so every name can be read.
+        for above in [true, false] {
+            var column = heads.indices.filter { (heads[$0].2 < cy) == above && heads[$0].1 == cx }
+            column.sort { abs(heads[$0].2 - cy) < abs(heads[$1].2 - cy) }
+            var previous: Double?
+            for i in column {
+                let size = 9 + heads[i].3 * 1.5
+                if let last = previous, abs(heads[i].2 - cy) < last + size + 11 {
+                    heads[i].2 = cy + (above ? -1 : 1) * (last + size + 11)
+                }
+                previous = abs(heads[i].2 - cy) + size - 9
+            }
+        }
+        for h in heads.sorted(by: { $0.4 < $1.4 }) { head(&g, faces[h.0], h.1, h.2, h.3, h.4, h.5, options) }
         light.fill(circle(cx, cy, 30), with: .radialGradient(Gradient(stops: [
             .init(color: RGB(255, 250, 235).color(1), location: 0), .init(color: RGB(255, 220, 160).color(0.5), location: 0.2),
             .init(color: Pal.amber.color(0), location: 1),

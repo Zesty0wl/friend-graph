@@ -4,7 +4,7 @@
 
 <p align="center">See who is really in your circle, from what your Mac already knows.</p>
 
-![My circle](docs/circle.png)
+![My circle, in motion](docs/video/circle.gif)
 
 Your Mac keeps a record of who you talk to, how often, and how quickly you each reply. Friend Graph reads it and draws four pictures:
 
@@ -15,9 +15,12 @@ Your Mac keeps a record of who you talk to, how often, and how quickly you each 
 
 A panel beside each picture pulls out the facts worth knowing, with a short note written on your Mac by Apple Intelligence.
 
-![What my Mac knows](docs/iris.png)
+| | |
+|---|---|
+| ![My year](docs/video/my-year.gif) | ![What my Mac knows](docs/video/mac-knows.gif) |
+| ![The app window](docs/circle.png) | ![One person](docs/person.png) |
 
-The screenshots use made-up people. The app has a "Try it with made-up people" button so you can look before granting anything.
+Everything shown here uses made-up people; the app has a "Try it with made-up people" button so you can look before granting anything. More screenshots and videos are in [docs](docs).
 
 ## Privacy
 

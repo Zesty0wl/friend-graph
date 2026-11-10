@@ -193,6 +193,18 @@ enum Snapshot {
             if open { report.append("fallback: " + panel.fallback) }
             report.append("story: " + (open ? (panel.storyKey.flatMap { narrator.stories[$0] } ?? "(none written)") : (panel.storyKey.flatMap { narrator.stories[$0] } == nil ? "(none written)" : "(written, not shown for real data)")))
         }
+        // --videos: a short film of every picture, for the README. Made-up people only.
+        if CommandLine.arguments.contains("--videos"), open {
+            for tab in Tab.allCases {
+                do {
+                    let url = try await Exporter.video(.init(tab: tab, names: .first, photos: true), model: model, seconds: 8) { _ in }
+                    let target = directory.appendingPathComponent("\(tab.rawValue).mp4")
+                    try? FileManager.default.removeItem(at: target)
+                    try FileManager.default.copyItem(at: url, to: target)
+                    report.append("wrote \(tab.rawValue).mp4")
+                } catch { report.append("video FAILED for \(tab.rawValue): \(error)") }
+            }
+        }
         if CommandLine.arguments.contains("--video") {
             do {
                 let url = try await Exporter.video(.init(tab: .circle, names: open ? .first : .none, photos: open), model: model, seconds: 3) { _ in }

@@ -82,6 +82,14 @@ struct RootView: View {
                 //   --sample [--main] [--tab circle|journey|year|iris] [--share]
                 let args = CommandLine.arguments
                 model.useSample()
+                NSApp.activate(ignoringOtherApps: true)
+                if let at = args.firstIndex(of: "--size"), at + 1 < args.count {
+                    let parts = args[at + 1].split(separator: "x").compactMap { Double($0) }
+                    if parts.count == 2, let window = NSApp.windows.first {
+                        window.setContentSize(NSSize(width: parts[0], height: parts[1]))
+                        window.center()
+                    }
+                }
                 if args.contains("--main") { model.confirm(model.decisions) }
                 if let at = args.firstIndex(of: "--tab"), at + 1 < args.count, let tab = Tab(rawValue: args[at + 1]) { model.tab = tab }
                 if args.contains("--share") { model.showShare = true }

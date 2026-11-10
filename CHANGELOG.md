@@ -26,4 +26,5 @@ First version.
 
 ### Other
 - Try it with made-up people, without granting access.
+- In the moving timeline, faces that would overlap are eased apart so every name can be read.
 - Requires macOS 27.
