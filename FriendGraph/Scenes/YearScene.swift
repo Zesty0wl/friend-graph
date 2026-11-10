@@ -31,6 +31,8 @@ final class YearScene: VisualScene {
     }
 
     var footer: String { "53 weeks of one-to-one messages" }
+    /// The ribbons sweep in, then hold so they can be read.
+    var storySeconds: Double { 8 }
     var detailKey: String { hovered.map { "row\($0)" } ?? "none" }
     var selectedPersonID: String? { hovered.map { people[$0].id } }
     var detail: Detail? {

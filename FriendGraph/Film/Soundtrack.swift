@@ -62,7 +62,7 @@ enum Soundtrack {
         // A simple echo for some space, then fades at both ends.
         let delay = Int(0.36 * sampleRate)
         if count > delay { for i in delay..<count { out[i] += out[i - delay] * 0.18 } }
-        let fadeIn = Int(1.0 * sampleRate), fadeOut = Int(2.2 * sampleRate)
+        let fadeIn = Int(1.0 * sampleRate), fadeOut = Int(3.2 * sampleRate)
         for i in 0..<min(fadeIn, count) { out[i] *= Float(i) / Float(fadeIn) }
         for i in 0..<min(fadeOut, count) { out[count - 1 - i] *= Float(i) / Float(fadeOut) }
         let peak = out.map { abs($0) }.max() ?? 1

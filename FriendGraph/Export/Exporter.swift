@@ -12,6 +12,10 @@ enum Exporter {
         var names: NameStyle = .initials
         var photos = false
         var tall = false
+        /// For a video: how many seconds to make. Nil means the whole story.
+        var videoLimit: Double?
+        /// When the video is shorter than the story: keep the most recent part, or the beginning.
+        var keepRecent = true
         var size: CGSize { tall ? CGSize(width: 1080, height: 1920) : CGSize(width: 1080, height: 1080) }
         var options: DrawOptions { DrawOptions(names: names, photos: photos) }
     }
@@ -95,11 +99,23 @@ enum Exporter {
         }
     }
 
-    /// Ten seconds at 30 frames a second. Reports progress from 0 to 1.
-    static func video(_ request: Request, model: AppModel, seconds: Double = 10, progress: @escaping (Double) -> Void) async throws -> URL {
-        // The circle opens with everyone blooming out from the centre, which is worth keeping in a video.
-        guard let scene = scene(for: request, model: model, settle: request.tab == .journey ? seconds : 0.6) else { throw Failure.nothingToDraw }
-        if let journey = scene as? JourneyScene { journey.jump(secondsBeforeEnd: seconds + 0.05) }
+    /// How long a picture's whole story takes to play, in seconds.
+    static func storySeconds(_ tab: Tab, model: AppModel) -> Double {
+        SceneBuilder.make(tab, model: model, live: false)?.storySeconds ?? 10
+    }
+
+    /// Anything longer than this is awkward to share, so the owner is offered shorter lengths.
+    static let comfortableSeconds: Double = {
+        // "--comfort 20" lowers the threshold, for checking the long-story choices with a short sample history.
+        let args = CommandLine.arguments
+        return args.firstIndex(of: "--comfort").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil } ?? 60
+    }()
+
+    /// A video of one picture: its whole story, or the part the owner asked for. Reports progress from 0 to 1.
+    static func video(_ request: Request, model: AppModel, seconds limit: Double? = nil, progress: @escaping (Double) -> Void) async throws -> URL {
+        guard let scene = SceneBuilder.make(request.tab, model: model, live: false) else { throw Failure.nothingToDraw }
+        let seconds = min(scene.storySeconds, limit ?? request.videoLimit ?? scene.storySeconds)
+        scene.beginStory(length: seconds, keepingEnd: request.keepRecent)
         let url = temporaryURL(request, video: true), fps = 30
         try await encode(size: request.size, frames: Int(seconds) * fps, fps: fps, to: url, progress: progress) {
             scene.advance(by: 1.0 / Double(fps))
@@ -173,14 +189,18 @@ extension Exporter {
         try await session.export(to: url, as: .mp4)
     }
 
+    /// The most recent film made, kept so the self-check can report its timings.
+    static var lastFilm: Film?
+
     /// Makes the whole "My year" film: captions, picture, music. Progress runs from 0 to 1.
     static func film(model: AppModel, narrator: Narrator, answers: Film.Answers, options: DrawOptions, progress: @escaping (Double) -> Void) async throws -> URL {
         let script = Film.script(model: model, answers: answers)
         // Captions first: a sentence each for the three chapters that need one.
-        var captions = [String](repeating: "", count: Film.starts.count)
-        captions[2] = await narrator.caption(script.circleFacts)
+        var captions = [String](repeating: "", count: 6)
+        // One fact each, so every caption is short enough to take in at a glance.
+        captions[2] = await narrator.caption(Array(script.circleFacts.prefix(1)))
         progress(0.03)
-        captions[3] = await narrator.caption(script.yearFacts)
+        captions[3] = await narrator.caption(Array(script.yearFacts.prefix(1)))
         progress(0.06)
         // Anyone in memory keeps our own plain words; no model writes about them.
         let memory = script.person.map { model.decisions.standing(of: $0) == .inMemory } ?? false
@@ -188,17 +208,18 @@ extension Exporter {
         progress(0.09)
 
         let film = Film(model: model, script: script, captions: captions, options: options)
+        lastFilm = film
         // A folder of its own for every film, so two windows or two copies of the app can never write over each other.
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("FriendGraph-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         let silent = base.appendingPathComponent("picture.mp4"), music = base.appendingPathComponent("music.m4a")
         let final = base.appendingPathComponent("My year.mp4")
-        let frames = Int(Film.length) * Film.fps
+        let frames = Int((film.length * Double(Film.fps)).rounded(.up))
         try await encode(size: Film.size, frames: frames, fps: Film.fps, to: silent, progress: { progress(0.09 + 0.86 * $0) }) {
             film.advance(by: 1.0 / Double(Film.fps))
             return render(Film.size) { film.paint($0) }
         }
-        do { try Soundtrack.write(starts: Film.starts, length: Film.length, cues: Film.cues(script: script, arrivals: film.arrivals), to: music) }
+        do { try Soundtrack.write(starts: film.starts, length: film.length, cues: film.cues(), to: music) }
         catch { throw Failure.writer("The music could not be made: \(error.localizedDescription)") }
         do { try await join(video: silent, audio: music, into: final) }
         catch { throw Failure.writer("The music could not be added to the picture: \(error.localizedDescription)") }
@@ -272,10 +293,10 @@ enum Snapshot {
             report.append("story: " + (open ? (panel.storyKey.flatMap { narrator.stories[$0] } ?? "(none written)") : (panel.storyKey.flatMap { narrator.stories[$0] } == nil ? "(none written)" : "(written, not shown for real data)")))
         }
         // --videos: a short film of every picture, for the README. Made-up people only.
-        if CommandLine.arguments.contains("--videos"), open {
+        if CommandLine.arguments.contains("--videos") {
             for tab in Tab.allCases {
                 do {
-                    let url = try await Exporter.video(.init(tab: tab, names: .first, photos: true), model: model, seconds: 8) { _ in }
+                    let url = try await Exporter.video(.init(tab: tab, names: open ? .first : .none, photos: open), model: model) { _ in }
                     let target = directory.appendingPathComponent("\(tab.rawValue).mp4")
                     try? FileManager.default.removeItem(at: target)
                     try FileManager.default.copyItem(at: url, to: target)
@@ -283,7 +304,21 @@ enum Snapshot {
                 } catch { report.append("video FAILED for \(tab.rawValue): \(error)") }
             }
         }
-        // --film: the 30 second "My year" film, with stand-in answers. Made-up people only.
+        // How long each picture's story is, and a check that a shortened timeline keeps the right end.
+        report.append("story seconds: " + Tab.allCases.map { "\($0.rawValue) \(Int(Exporter.storySeconds($0, model: model)))" }.joined(separator: ", "))
+        if CommandLine.arguments.contains("--trim") {
+            for recent in [true, false] {
+                var request = Exporter.Request(tab: .journey, names: open ? .first : .none, photos: open)
+                request.videoLimit = 20; request.keepRecent = recent
+                if let url = try? await Exporter.video(request, model: model, progress: { _ in }) {
+                    let target = directory.appendingPathComponent(recent ? "journey-recent.mp4" : "journey-beginning.mp4")
+                    try? FileManager.default.removeItem(at: target)
+                    try? FileManager.default.copyItem(at: url, to: target)
+                    report.append("wrote \(target.lastPathComponent)")
+                }
+            }
+        }
+        // --film: the "My year" film, with stand-in answers. Made-up people only.
         if CommandLine.arguments.contains("--film"), open {
             do {
                 let started = Date()
@@ -293,8 +328,14 @@ enum Snapshot {
                 try? FileManager.default.removeItem(at: target)
                 try FileManager.default.copyItem(at: url, to: target)
                 report.append("wrote my-year.mp4 in \(Int(Date().timeIntervalSince(started)))s")
-                let script = Film.script(model: model, answers: answers)
-                report.append("film captions: " + [await narrator.caption(script.circleFacts), await narrator.caption(script.yearFacts), await narrator.caption(script.personFacts)].joined(separator: " | "))
+                if let made = Exporter.lastFilm {
+                    report.append("film length: \(String(format: "%.1f", made.length))s, chapters start at " + made.starts.map { String(format: "%.1f", $0) }.joined(separator: ", "))
+                    for i in [2, 3, 4] {
+                        let end = i + 1 < made.starts.count ? made.starts[i + 1] : made.length
+                        let shown = [0, 0, Film.captionDelay(made.arrivals), Film.busiestCaption, Film.personCaption][i]
+                        report.append("caption \(i): \(made.captions[i].split(separator: " ").count) words, on screen \(String(format: "%.1f", end - made.starts[i] - shown))s: \(made.captions[i])")
+                    }
+                }
             } catch { report.append("film FAILED: \(error)") }
         }
         if CommandLine.arguments.contains("--video") {

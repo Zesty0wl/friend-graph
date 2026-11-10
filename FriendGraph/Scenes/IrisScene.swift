@@ -88,6 +88,7 @@ final class IrisScene: VisualScene {
     func select(named name: String) { pinned = strands.firstIndex { $0.view.name == name } }
 
     var footer: String { "Plain descriptions are read from Apple's internal names. Apple documents none of this." }
+    var storySeconds: Double { 12 }
     var detailKey: String { selected.map { strands[$0].view.name } ?? "none" }
 
     var detail: Detail? {

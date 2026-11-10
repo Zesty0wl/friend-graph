@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "My year": a 30 second film in six chapters, drawn frame by frame. It reuses the app's own
+/// "My year": a short film in six chapters, drawn frame by frame, as long as its words take to read. It reuses the app's own
 /// pictures, so the film shows exactly what the owner has already seen and confirmed.
 @MainActor
 final class Film {
@@ -13,18 +13,40 @@ final class Film {
 
     static let size = CGSize(width: 1080, height: 1920)
     static let fps = 30
-    static let length = 30.0
-    /// Title, numbers, closest people, busiest week, one person, close.
-    static let starts: [Double] = [0, 4, 8, 15, 20, 25.5]
+    /// How long the last picture is left to fade out.
+    static let fadeOut = 1.8
     /// In the "closest people" chapter, one person arrives every `arrivalGap` seconds, each on a note.
-    static let firstArrival = 0.3, arrivalGap = 0.22
+    static let firstArrival = 0.3, arrivalGap = 0.2
+
+    /// How long a line needs to stay up to be read comfortably: about three words a second, plus a moment
+    /// to find it, and never less than three seconds.
+    static func readingTime(_ text: String) -> Double {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        return words == 0 ? 0 : max(3, Double(words) / 3 + 0.8)
+    }
+
+    /// When each chapter starts and how long the film is. Chapters with a caption last as long as that
+    /// caption takes to read, so the film is as long as its words need and no longer.
+    static func plan(script: Script, captions: [String], arrivals: Int) -> (starts: [Double], length: Double) {
+        let title = 4.2
+        let numbers = Double(min(3, script.numbers.count) - 1) * 0.7 + 1.5 + 2.2
+        let closest = captionDelay(arrivals) + readingTime(captions[2]) + 0.6
+        let busiest = busiestCaption + readingTime(captions[3]) + 0.6
+        let person = personCaption + max(readingTime(captions[4]), 2.5) + 0.6
+        let close = signOff(script) + 0.35 + 0.7 + 3.2 + fadeOut
+        var starts = [0.0]
+        for span in [title, numbers, closest, busiest, person] { starts.append(starts.last! + span) }
+        return (starts, starts.last! + close)
+    }
+
+    static let busiestCaption = 2.0, personCaption = 2.4
 
     /// A moment where something appears on screen, so the music can play a note at the same instant.
     /// `step` picks the note from the chapter's chord: higher steps are higher notes.
     struct Cue { var time: Double; var step: Int; var level: Double }
 
     /// Every such moment in the film, in order. The drawing code below uses the same timings.
-    static func cues(script: Script, arrivals: Int) -> [Cue] {
+    func cues() -> [Cue] {
         var cues: [Cue] = []
         func add(_ chapter: Int, _ local: Double, _ step: Int, _ level: Double = 1) { cues.append(Cue(time: starts[chapter] + local, step: step, level: level)) }
         // Title: three rings start, the title lands, then the word.
@@ -33,20 +55,25 @@ final class Film {
         for i in 0..<min(3, script.numbers.count) { add(1, Double(i) * 0.7, i * 2, 1.2); add(1, Double(i) * 0.7 + 1.5, i * 2 + 5, 0.7) }
         // Closest people: one note per arrival, the inner circle brightest.
         let walk = [0, 2, 4, 1, 3]
-        for k in 0..<arrivals { add(2, firstArrival + Double(k) * arrivalGap, walk[k % 5] + (k < 5 ? 5 : k < 11 ? 0 : 0), k < 5 ? 1.15 : k < 11 ? 0.9 : 0.7) }
-        add(2, captionDelay(arrivals), 0, 0.9)
+        for k in 0..<arrivals { add(2, Self.firstArrival + Double(k) * Self.arrivalGap, walk[k % 5] + (k < 5 ? 5 : 0), k < 5 ? 1.15 : k < 11 ? 0.9 : 0.7) }
+        if !captions[2].isEmpty { add(2, Self.captionDelay(arrivals), 0, 0.9) }
         // Week by week: a rising run as the ribbons sweep across.
         for j in 0..<5 { add(3, 2.6 * Double(j) / 4, j + 1) }
-        add(3, 3.0, 0, 0.9)
+        if !captions[3].isEmpty { add(3, Self.busiestCaption + 0.4, 0, 0.9) }
         // One person: the portrait, three lines about them, then the caption.
-        add(4, 0.05, 0, 1.3); add(4, 0.9, 2); add(4, 1.35, 3); add(4, 1.8, 4); add(4, 2.4, 6, 0.9)
-        // Close: the owner's words if there are any, then the sign-off.
-        let quote = script.moment.isEmpty ? 0.0 : 2.6
+        add(4, 0.05, 0, 1.3); add(4, 0.9, 2); add(4, 1.35, 3); add(4, 1.8, 4)
+        if !captions[4].isEmpty { add(4, Self.personCaption, 6, 0.9) }
+        // Close: the owner's words if there are any, then the sign-off and a last low note to settle on.
+        let quote = Self.signOff(script)
         add(5, 0.05, 0, 1.1)
-        if quote > 0 { add(5, quote, 2) }
-        add(5, quote + 0.35, 4); add(5, quote + 0.7, 7, 1.2)
+        if !script.moment.isEmpty { add(5, 0.6, 2) }
+        add(5, quote + 0.35, 4); add(5, quote + 0.7, 7, 1.2); add(5, quote + 2.2, 0, 0.8)
         return cues
     }
+
+    /// When the sign-off appears in the last chapter: after the owner's own words have had time to be read,
+    /// or after a look at the circle.
+    static func signOff(_ script: Script) -> Double { script.moment.isEmpty ? 1.4 : 0.5 + readingTime(script.moment) + 0.6 }
 
     static func captionDelay(_ arrivals: Int) -> Double { firstArrival + Double(arrivals) * arrivalGap + 0.25 }
 
@@ -67,6 +94,9 @@ final class Film {
     /// One caption per chapter; empty where the chapter speaks for itself.
     var captions: [String]
     private let options: DrawOptions
+    /// When each chapter starts: title, numbers, closest people, busiest week, one person, close.
+    let starts: [Double]
+    let length: Double
     private let circleScene: CircleScene?
     let arrivals: Int
     private let closing: CircleScene?
@@ -105,6 +135,7 @@ final class Film {
         self.captions = captions
         self.options = options
         arrivals = min(18, model.circlePeople.count)
+        (starts, length) = Self.plan(script: script, captions: captions, arrivals: arrivals)
         circleScene = model.dataset.map { CircleScene(people: model.circlePeople, decisions: model.decisions, scoredCount: $0.scored.count, othersKnown: $0.othersKnown,
                                                       firstBirth: Self.firstArrival, stagger: Self.arrivalGap) }
         closing = SceneBuilder.make(.circle, model: model, live: false) as? CircleScene
@@ -116,8 +147,8 @@ final class Film {
         for _ in 0..<70 { stars.append((random.next() * 1080, random.next() * 1920, 0.3 + random.next() * 0.7)) }
     }
 
-    private func chapter(at t: Double) -> Int { Self.starts.lastIndex { $0 <= t } ?? 0 }
-    private func end(of chapter: Int) -> Double { chapter + 1 < Self.starts.count ? Self.starts[chapter + 1] : Self.length }
+    private func chapter(at t: Double) -> Int { starts.lastIndex { $0 <= t } ?? 0 }
+    private func end(of chapter: Int) -> Double { chapter + 1 < starts.count ? starts[chapter + 1] : length }
 
     func advance(by dt: Double) {
         time += dt
@@ -148,13 +179,13 @@ final class Film {
     }
 
     func paint(_ p: Painter) {
-        let t = time, index = chapter(at: t), local = t - Self.starts[index], span = end(of: index) - Self.starts[index]
+        let t = time, index = chapter(at: t), local = t - starts[index], span = end(of: index) - starts[index]
         for s in stars {
             let drift = s.1 - t * 6 * s.2
             p.rect(s.0, drift.truncatingRemainder(dividingBy: 1920) + (drift < 0 ? 1920 : 0), 2, 2, Pal.paper.c(0.06 + 0.12 * s.2))
         }
         // Each chapter fades in and out, so the cuts are soft.
-        let fade = min(1, local / 0.55) * (index == Self.starts.count - 1 ? 1 : min(1, (span - local) / 0.45))
+        let fade = min(1, local / 0.55) * (index == starts.count - 1 ? 1 : min(1, (span - local) / 0.45))
         p.save()
         p.opacity = max(0, min(1, fade))
         switch index {
@@ -169,8 +200,8 @@ final class Film {
         // The same quiet marks on every frame.
         p.text("MY YEAR · \(script.year)", 540, 120, .sans(26, .medium, tracking: 4), Pal.quiet.c())
         p.text("FRIEND GRAPH", 540, 1820, .sans(24, tracking: 5), Pal.quiet.c(0.8))
-        // The last second fades to black.
-        let out = max(0, min(1, (t - (Self.length - 0.9)) / 0.9))
+        // The end fades to black slowly, so the film closes instead of stopping.
+        let out = max(0, min(1, (t - (length - Self.fadeOut)) / Self.fadeOut))
         if out > 0 { p.rect(0, 0, 1080, 1920, Pal.ground.c(out)) }
     }
 
@@ -253,7 +284,7 @@ final class Film {
     private func busiest(_ p: Painter, _ u: Double) {
         p.text("WEEK BY WEEK", 540, 250, .sans(30, .medium, tracking: 5), Pal.rose.c())
         if let year { picture(p, year, top: 350, width: 1060) }
-        caption(p, captions[3], y: 1400, after: u - 3.0)
+        caption(p, captions[3], y: 1400, after: u - Self.busiestCaption)
     }
 
     private func spotlight(_ p: Painter, _ u: Double) {
@@ -282,7 +313,7 @@ final class Film {
             p.text(line, 540, 1100 + Double(i) * 66, .sans(40), Pal.soft.c())
             p.restore()
         }
-        caption(p, captions[4], y: 1380, after: u - 2.4)
+        caption(p, captions[4], y: 1380, after: u - Self.personCaption)
     }
 
     private func close(_ p: Painter, _ u: Double, _ span: Double) {
@@ -293,14 +324,14 @@ final class Film {
             p.rect(0, 280, 1080, 1100, Pal.ground.c(0.45))          // sit the circle back behind the words
         }
         // The owner's own words first, if they gave us some, then the sign-off.
-        let quoteTime = script.moment.isEmpty ? 0 : 2.6
+        let signOff = Self.signOff(script)
         p.save()
-        if u < quoteTime {
-            p.opacity *= min(1, u / 0.6) * min(1, (quoteTime - u) / 0.5)
+        if u < signOff, !script.moment.isEmpty {
+            p.opacity *= min(1, (u - 0.5) / 0.6) * min(1, (signOff - u) / 0.5)
             p.text("THE BEST OF IT", 540, 1400, .sans(28, .medium, tracking: 5), Pal.amber.c())
             words(p, "“" + script.moment + "”", y: 1450, style: .serif(62), colour: Pal.paper.c())
-        } else {
-            p.opacity *= ease((u - quoteTime - 0.35) / 0.6)
+        } else if u >= signOff {
+            p.opacity *= ease((u - signOff - 0.35) / 0.7)
             p.text("That was my year.", 540, 1500, .serif(96), Pal.paper.c())
         }
         p.restore()

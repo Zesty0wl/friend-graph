@@ -186,6 +186,9 @@ final class CircleScene: VisualScene {
         return Detail(title: p.name, subtitle: subtitle.joined(separator: " · "), rows: rows)
     }
 
+    /// Everyone arrives, then long enough to watch messages go back and forth and the rings turn.
+    var storySeconds: Double { 14 }
+
     var footer: String {
         var counts = [0, 0, 0]
         for (i, b) in bodies.enumerated() { counts[zone(of: i == grabbed ? distance(b) : b.home)] += 1 }

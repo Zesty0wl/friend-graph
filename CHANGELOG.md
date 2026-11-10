@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 (10 November 2026)
+
+- Shared videos now run for as long as each picture needs. The timeline plays its whole story from the first message to today, at the normal pace; the circle runs 14 seconds, the weekly chart 8 and the iris 12.
+- When a story runs longer than a minute, the share sheet offers shorter lengths and a choice of keeping the most recent part or the beginning. It starts on 60 seconds of the most recent.
+- The share sheet shows how long the video will be before you make it.
+- My Film now gives every line time to be read: each chapter lasts as long as its caption needs, captions are one short sentence each, and the film runs a little under 50 seconds.
+- On the moving timeline, each line now bends to meet its face, so a face that is moved clear of its neighbours never comes away from its line.
+- The film's closing line holds for several seconds and fades out slowly with the music, where it used to stop abruptly.
+
 ## 0.3.0 (10 November 2026)
 
 ### Drawn on the GPU

@@ -1,7 +1,7 @@
 import SwiftUI
 import AVKit
 
-/// Three quick questions, then a 30 second film of the owner's year, made on this Mac.
+/// Three quick questions, then a short film of the owner's year, made on this Mac.
 struct FilmSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(Narrator.self) private var narrator
@@ -36,7 +36,7 @@ struct FilmSheet: View {
     private var questions: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("My year, as a film").font(serif(34)).foregroundStyle(Pal.paper.color())
-            Text("Thirty seconds, with music, made on this Mac from the people in your circle. Three quick questions first. Skip any you like.")
+            Text("Under a minute, with music, made on this Mac from the people in your circle. Three quick questions first. Skip any you like.")
                 .font(sans(13)).foregroundStyle(Pal.soft.color()).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
 
             question("Your year in a word") {
@@ -83,7 +83,7 @@ struct FilmSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Making your film").font(serif(34)).foregroundStyle(Pal.paper.color())
             ProgressView(value: progress)
-            Text(progress < 0.09 ? "Writing the captions" : progress < 0.95 ? "Drawing \(Int(Film.length) * Film.fps) frames" : "Adding the music")
+            Text(progress < 0.09 ? "Writing the captions" : progress < 0.95 ? "Drawing the film" : "Adding the music")
                 .font(sans(13)).foregroundStyle(Pal.soft.color())
             HStack { Spacer(); Button("Cancel") { task?.cancel(); phase = .questions } }
         }

@@ -11,12 +11,27 @@ struct ShareSheet: View {
     @AppStorage("shareNames") private var names: NameStyle = .initials
     @AppStorage("sharePhotos") private var photos = false
     @State private var asVideo = false
+    /// Chosen video length in seconds; zero means the whole story.
+    @State private var videoLength = 0.0
+    @State private var keepRecent = true
+    @State private var story = 10.0
     @State private var tall = false
     @State private var preview: CGImage?
     @State private var working: Double?
     @State private var message = ""
 
-    private var request: Exporter.Request { .init(tab: tab, names: names, photos: photos, tall: tall) }
+    private var request: Exporter.Request {
+        .init(tab: tab, names: names, photos: photos, tall: tall, videoLimit: videoLength > 0 ? videoLength : nil, keepRecent: keepRecent)
+    }
+    private var seconds: Double { videoLength > 0 ? min(videoLength, story) : story }
+    private var isLong: Bool { story > Exporter.comfortableSeconds }
+
+    private func spoken(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded()), minutes = total / 60, rest = total % 60
+        if minutes == 0 { return "\(total) seconds" }
+        let lead = minutes == 1 ? "1 minute" : "\(minutes) minutes"
+        return rest == 0 ? lead : "\(lead) \(rest) seconds"
+    }
     private var hasPeople: Bool { tab != .iris }
 
     var body: some View {
@@ -42,7 +57,27 @@ struct ShareSheet: View {
                     }
                 }
                 option("As") {
-                    Picker("As", selection: $asVideo) { Text("Picture").tag(false); Text("10 second video").tag(true) }
+                    Picker("As", selection: $asVideo) { Text("Picture").tag(false); Text("Video, \(spoken(seconds))").tag(true) }
+                }
+                // A long story gets a choice of how much to share, and which end to keep.
+                if asVideo && isLong {
+                    HStack(spacing: 10) {
+                        Text("Length").font(sans(13)).foregroundStyle(Pal.soft.color()).frame(width: 60, alignment: .leading)
+                        Picker("Length", selection: $videoLength) {
+                            Text("The whole story, \(spoken(story))").tag(0.0)
+                            ForEach([90.0, 60.0, 30.0, 15.0].filter { $0 < story }, id: \.self) { Text(spoken($0)).tag($0) }
+                        }
+                        .labelsHidden().fixedSize()
+                    }
+                    if videoLength > 0 {
+                        option("Keep") {
+                            Picker("Keep", selection: $keepRecent) { Text("The most recent").tag(true); Text("The beginning").tag(false) }
+                        }
+                    }
+                    Text(videoLength > 0
+                         ? "Your story runs \(spoken(story)). This video keeps \(keepRecent ? "the last" : "the first") \(spoken(seconds)) of it."
+                         : "Your story runs \(spoken(story)), which some apps will cut short or split.")
+                        .font(sans(12)).foregroundStyle(Pal.amber.color()).fixedSize(horizontal: false, vertical: true)
                 }
                 option("Shape") {
                     Picker("Shape", selection: $tall) { Text("Square").tag(false); Text("Tall, for stories").tag(true) }
@@ -71,10 +106,16 @@ struct ShareSheet: View {
             .frame(width: 400)
         }
         .padding(24)
-        .frame(height: tall ? 581 : 400)
+        .frame(height: tall ? 581 : (asVideo && isLong ? 480 : 400))
         .background(RGB(20, 20, 28).color())
         .preferredColorScheme(.dark)
-        .onAppear(perform: render)
+        .onAppear {
+            story = Exporter.storySeconds(tab, model: model)
+            // A long story starts on a length most places accept; the owner can change it.
+            if story > Exporter.comfortableSeconds { videoLength = [60.0, 30, 15].first { $0 < story } ?? 0 }
+            if CommandLine.arguments.contains("--as-video") { asVideo = true }
+            render()
+        }
         .onChange(of: request) { render() }
     }
 

@@ -20,6 +20,8 @@ final class JourneyScene: VisualScene {
     private var held = false
     private var lastPointerX = 0.0
     private var wall = 0.0
+    /// How far each face is currently moved to keep clear of its neighbours.
+    private var shift: [Double] = []
 
     init(cast: [Person], leading: Int, decisions: Decisions, firstDay: Date, days: Int) {
         faces = cast.map { Face($0, decisions) }
@@ -115,7 +117,19 @@ final class JourneyScene: VisualScene {
     func advance(by step: Double) {
         let dt = min(0.05, max(0, step))
         wall += dt
-        if !held { play += dt }
+        if filming {
+            // Being filmed: run forward once and stop on today, without looping round.
+            play = min(clockTable[n] - 0.0001, play + dt)
+        } else if !held { play += dt }
+    }
+
+    // A shared video tells the whole story at the normal pace, from the first message to today, with a
+    // moment on today at the end. The owner can ask for less, and choose which end to keep.
+    private var filming = false
+    var storySeconds: Double { (clockTable[n] + 2.5).rounded(.up) }
+    func beginStory(length: Double, keepingEnd: Bool) {
+        filming = true
+        play = keepingEnd ? max(0, clockTable[n] - max(0, length - 2.5)) : 0
     }
 
     /// Moves playback so that it ends `secondsBeforeEnd` before the present day.
@@ -142,25 +156,15 @@ final class JourneyScene: VisualScene {
         var dash = cx + 9
         while dash < width { p.line(dash, cy, dash + 2, cy, width: 1.5, Pal.paper.c(0.10), round: false); dash += 9 }
 
-        p.additive = true
-        let step = trail / 150
+        // First work out where everyone's face belongs at this moment.
         var heads: [(Int, Double, Double, Double, Double, RGB)] = []
+        var trailEnd = [Double](repeating: 0, count: faces.count)
         for person in faces.indices.reversed() {
             let colour = Pal.series[person % Pal.series.count]
             let rest = Double(last[person]) + 3
             let fade = memory[person] ? max(0, min(1, (w - rest) / 21)) : 0
             let ease = fade * fade * (3 - 2 * fade)
-            // The trail: where they have been alongside me.
-            let end = memory[person] ? min(w, rest) : w
-            var k = max(0, w - trail)
-            while k < end {
-                let a = activity(person, k), f = 1 - (w - k) / trail
-                if a > 0.004 {
-                    let k2 = min(end, k + step * 1.5)
-                    p.line(x(k), y(person, k), x(k2), y(person, k2), width: 0.8 + a * 4.2, colour.c(f * f * (0.08 + 0.75 * a)))
-                }
-                k += step
-            }
+            trailEnd[person] = memory[person] ? min(w, rest) : w
             let a = activity(person, w), visible = min(1, a / 0.05)
             if visible <= 0.01 && !(memory[person] && fade > 0) { continue }
             var px = cx, py = y(person, w), r = (2 + a * 4.5) * (0.4 + 0.6 * visible), alpha = (0.25 + 0.75 * a) * visible, c = colour
@@ -171,27 +175,54 @@ final class JourneyScene: VisualScene {
                 alpha = (0.25 + 0.75 * a0) * (1 - ease) + (0.8 + sin(wall * 1.3) * 0.08) * ease
                 if ease > 0.5 { c = Pal.memory }
             }
-            p.glow(px, py, r * 4.5, c, 0.45 * alpha)
             heads.append((person, px, py, r, alpha, c))
         }
-        // Faces that land on top of each other are eased apart, away from my line, so every name can be read.
+        // Faces that would land on top of each other are eased apart, away from my line, so every name can
+        // be read. How far each is moved is remembered and changed gradually, and the same shift is applied
+        // to the end of that person's line below, so a face never comes away from its line.
+        var wanted = [Double](repeating: 0, count: faces.count)
         for above in [true, false] {
             var column = heads.indices.filter { (heads[$0].2 < cy) == above && heads[$0].1 == cx }
             column.sort { abs(heads[$0].2 - cy) < abs(heads[$1].2 - cy) }
+            var placed = column.map { heads[$0].2 }
             var previous: Double?
-            for i in column {
+            for (k, i) in column.enumerated() {
                 let size = 9 + heads[i].3 * 1.5
-                if let last = previous, abs(heads[i].2 - cy) < last + size + 11 {
-                    heads[i].2 = cy + (above ? -1 : 1) * (last + size + 11)
-                }
-                previous = abs(heads[i].2 - cy) + size - 9
+                if let last = previous, abs(placed[k] - cy) < last + size + 11 { placed[k] = cy + (above ? -1 : 1) * (last + size + 11) }
+                previous = abs(placed[k] - cy) + size - 9
             }
             // If the stack would run off the picture, close it up evenly so everyone stays in view.
             let limit = (above ? cy : height - cy) - 26
-            if let furthest = column.map({ abs(heads[$0].2 - cy) }).max(), furthest > limit {
-                for i in column { heads[i].2 = cy + (heads[i].2 - cy) * limit / furthest }
+            if let furthest = placed.map({ abs($0 - cy) }).max(), furthest > limit {
+                placed = placed.map { cy + ($0 - cy) * limit / furthest }
+            }
+            for (k, i) in column.enumerated() { wanted[heads[i].0] = placed[k] - heads[i].2 }
+        }
+        if shift.count != faces.count { shift = wanted }
+        for i in shift.indices { shift[i] += (wanted[i] - shift[i]) * 0.18 }
+        for i in heads.indices where heads[i].1 == cx { heads[i].2 += shift[heads[i].0] }
+
+        // Then the lines: where each person has been alongside me, bending to meet their face.
+        p.additive = true
+        let step = trail / 150, reach = 42.0
+        for person in faces.indices.reversed() {
+            let colour = Pal.series[person % Pal.series.count], end = trailEnd[person], moved = shift[person]
+            func lifted(_ k: Double) -> Double {
+                guard moved != 0, !memory[person] || end == w else { return y(person, k) }
+                let near = max(0, 1 - (w - k) / reach)
+                return y(person, k) + moved * near * near * (3 - 2 * near)
+            }
+            var k = max(0, w - trail)
+            while k < end {
+                let a = activity(person, k), f = 1 - (w - k) / trail
+                if a > 0.004 {
+                    let k2 = min(end, k + step * 1.5)
+                    p.line(x(k), lifted(k), x(k2), lifted(k2), width: 0.8 + a * 4.2, colour.c(f * f * (0.08 + 0.75 * a)))
+                }
+                k += step
             }
         }
+        for h in heads { p.glow(h.1, h.2, h.3 * 4.5, h.5, 0.45 * h.4) }
         p.radial(cx, cy, from: 0, to: 30, stops: [(0, RGB(255, 250, 235).c(1)), (0.2, RGB(255, 220, 160).c(0.5)), (1, Pal.amber.c(0))])
         p.additive = false
         for h in heads.sorted(by: { $0.4 < $1.4 }) { head(p, faces[h.0], h.1, h.2, h.3, h.4, h.5, options) }

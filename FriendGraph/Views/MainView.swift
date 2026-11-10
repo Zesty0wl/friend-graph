@@ -83,7 +83,7 @@ struct MainView: View {
                 Button("Edit People") { model.phase = .confirm }
                     .help("Change who is in your pictures")
                 Button("My Film") { model.showFilm = true }
-                    .help("Make a 30 second film of your year")
+                    .help("Make a short film of your year")
                 Button("Share") { model.showShare = true }
                     .buttonStyle(PrimaryButtonStyle(large: false))
                     .disabled(scenes[model.tab] == nil)

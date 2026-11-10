@@ -132,6 +132,11 @@ protocol VisualScene: AnyObject {
     /// The person under the pointer, if this picture is of people.
     var selectedPersonID: String? { get }
     var footer: String { get }
+    /// How long a shared video of this picture needs to be to tell its story, in seconds.
+    var storySeconds: Double { get }
+    /// Gets the picture ready to be filmed. `length` is how many seconds will be filmed; when that is less
+    /// than the whole story, `keepingEnd` says whether to keep the most recent part or the beginning.
+    func beginStory(length: Double, keepingEnd: Bool)
     /// How often the live view redraws. Slow-moving pictures ask for less, which saves a great deal of work.
     var framesPerSecond: Double { get }
 }
@@ -145,6 +150,8 @@ extension VisualScene {
     var detail: Detail? { nil }
     var selectedPersonID: String? { nil }
     var framesPerSecond: Double { 60 }
+    var storySeconds: Double { 10 }
+    func beginStory(length: Double, keepingEnd: Bool) {}
 }
 
 func pt(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: x, y: y) }
