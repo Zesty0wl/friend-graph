@@ -1,0 +1,79 @@
+name: FriendGraph
+options:
+  bundleIdPrefix: uk.co.bzwrd
+  deploymentTarget:
+    macOS: "27.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: 8352865GK4
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+    ARCHS: "$(ARCHS_STANDARD)"
+    ONLY_ACTIVE_ARCH[config=Release]: NO
+
+targets:
+  FriendGraph:
+    type: application
+    platform: macOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: FriendGraph
+        excludes:
+          - "Info.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uk.co.bzwrd.friendgraph
+        PRODUCT_NAME: "Friend Graph"
+        PRODUCT_MODULE_NAME: FriendGraph
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Not sandboxed: the app reads other apps' databases, which needs Full Disk Access.
+        ENABLE_APP_SANDBOX: NO
+    info:
+      path: FriendGraph/Info.plist
+      properties:
+        CFBundleName: "Friend Graph"
+        CFBundleDisplayName: "Friend Graph"
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundlePackageType: APPL
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.social-networking
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: "© 2026 Neil Johnson"
+
+  FriendGraphTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: FriendGraphTests
+    dependencies:
+      - target: FriendGraph
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uk.co.bzwrd.friendgraph.tests
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Friend Graph.app/Contents/MacOS/Friend Graph"
+
+schemes:
+  FriendGraph:
+    build:
+      targets:
+        FriendGraph: all
+        FriendGraphTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - FriendGraphTests
+    archive:
+      config: Release
