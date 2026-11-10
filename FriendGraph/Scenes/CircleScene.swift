@@ -315,35 +315,27 @@ final class CircleScene: VisualScene {
 
     // MARK: Drawing
 
-    func draw(_ g: inout GraphicsContext, _ options: DrawOptions) {
+    func paint(_ p: Painter, _ options: DrawOptions) {
         let sel = selected
-        g.fill(Path(CGRect(x: 0, y: 0, width: 720, height: 720)), with: .color(Pal.ground.color()))
-        g.fill(circle(cx, cy, 340), with: .radialGradient(Gradient(stops: [
-            .init(color: Pal.amber.color(0.17), location: 0), .init(color: Pal.rose.color(0.055), location: 0.4),
-            .init(color: Pal.violet.color(0.03), location: 0.75), .init(color: Pal.ground.color(0), location: 1),
-        ]), center: pt(cx, cy), startRadius: 20, endRadius: 340))
+        p.radial(cx, cy, from: 20, to: 340, stops: [(0, Pal.amber.c(0.17)), (0.4, Pal.rose.c(0.055)), (0.75, Pal.violet.c(0.03)), (1, Pal.ground.c(0))])
 
         // Three faint rings, each in the colour of its distance and broken at the top for its label.
         let target = grabbed.map { zone(of: distance(bodies[$0])) }
+        let labelStyle = TextStyle.sans(10.5, .medium, tracking: 1.2)
         for (i, z) in Self.zones.enumerated() {
             let on = i == target, c = Pal.warmth((seats[i].0 + seats[i].1) / 2)
-            let text = z.label.uppercased(), half = (Double(text.count) * 7.6 / 2 + 12) / z.r
-            g.stroke(arc(cx, cy, z.r, -Double.pi / 2 + half, TAU - Double.pi / 2 - half), with: .color(c.color(on ? 0.7 : 0.2)), lineWidth: 1)
-            g.label(text, at: pt(cx, cy - z.r), font: sans(10.5, .medium), color: c.color(on ? 1 : 0.8), tracking: 1.2)
+            let text = z.label.uppercased(), half = (p.measure(text, labelStyle).width / 2 + 10) / z.r
+            p.ring(cx, cy, z.r, width: 1, c.c(on ? 0.7 : 0.2), from: -Double.pi / 2 + half, sweep: TAU - 2 * half)
+            p.text(text, cx, cy - z.r, labelStyle, c.c(on ? 1 : 0.8))
         }
 
-        var light = g
-        light.blendMode = .plusLighter
+        p.additive = true
         for (i, b) in bodies.enumerated() {
             guard let c = b.curve else { continue }
             let alpha = (0.5 * (sel != nil && sel != i ? 0.3 : 1) + b.emphasis * 0.4) * min(1, b.grow * 1.5) * (b.memory ? 0.55 : 1)
-            var path = Path()
-            path.move(to: c.0); path.addQuadCurve(to: c.2, control: c.1)
             let width = 1.1 + 3.4 * sqrt(Double(b.person.messages) / maxMessages) + b.emphasis * 1.2
-            light.stroke(path, with: .linearGradient(Gradient(stops: [
-                .init(color: RGB(255, 220, 170).color(alpha * 0.85), location: 0), .init(color: b.colour.color(alpha), location: 0.35),
-                .init(color: b.colour.color(alpha * 0.6), location: 1),
-            ]), startPoint: c.0, endPoint: c.2), style: StrokeStyle(lineWidth: width, lineCap: .round))
+            let warm = RGB(255, 220, 170).c(alpha * 0.85), near = b.colour.c(alpha), far = b.colour.c(alpha * 0.6)
+            p.curve(c.0, c.1, c.2, width: width, warm, near, far, at: 0.35)
         }
         let focus = sel.flatMap { bodies[$0].memory ? nil : $0 }
         for s in sparks {
@@ -355,64 +347,55 @@ final class CircleScene: VisualScene {
                 guard u >= 0, u <= 1 else { continue }
                 let w = 1 - u
                 let x = w * w * c.0.x + 2 * w * u * c.1.x + u * u * c.2.x, y = w * w * c.0.y + 2 * w * u * c.1.y + u * u * c.2.y
-                light.glow(x, y, 6 - Double(k) * 0.65, colour, alpha * (1 - Double(k) * 0.14))
+                p.glow(x, y, 6 - Double(k) * 0.65, colour, alpha * (1 - Double(k) * 0.14))
             }
         }
 
         // Me: the warm light everything grows from.
         let pr = 24 + sin(time * 0.55) + mePop * 1.8
-        light.fill(circle(cx, cy, pr + 30), with: .radialGradient(Gradient(colors: [RGB(255, 190, 110).color(0.5), Pal.amber.color(0)]),
-                                                                  center: pt(cx, cy), startRadius: pr - 4, endRadius: pr + 30))
-        g.fill(circle(cx, cy, pr), with: .color(Pal.core.color()))
-        g.label("Me", at: pt(cx, cy + 0.5), font: serif(21), color: RGB(26, 18, 8).color())
+        p.radial(cx, cy, from: pr - 4, to: pr + 30, RGB(255, 190, 110).c(0.5), Pal.amber.c(0))
+        p.additive = false
+        p.disc(cx, cy, pr, Pal.core.c())
+        p.text("Me", cx, cy + 0.5, .serif(21), RGB(26, 18, 8).c())
 
         let order = bodies.indices.sorted { a, b in
             if (a == sel) != (b == sel) { return b == sel }
             return bodies[a].radius < bodies[b].radius
         }
         for i in order where bodies[i].grow > 0.02 {
-            face(&g, bodies[i], alpha: (sel != nil && sel != i ? 0.4 : 1) * min(1, bodies[i].grow * 2), options)
+            face(p, bodies[i], alpha: (sel != nil && sel != i ? 0.4 : 1) * min(1, bodies[i].grow * 2), options)
         }
         guard options.names != .none else { return }
         for i in order {
             let b = bodies[i], r = b.radius * (1 + b.emphasis * 0.06), nameY = b.y + r + 15
             // With photos hidden and initials chosen, the disc already carries the initials.
-            if options.names == .initials && (!options.photos || b.face.image == nil) { continue }
+            if options.names == .initials && (!options.photos || b.face.photo == nil) { continue }
             var visible = (r > 24 || options.everyoneNamed ? 1 : b.emphasis) * min(1, b.grow * 2) * (sel != nil && sel != i ? 0.4 : 1)
             for z in Self.zones where abs(nameY - (cy - z.r)) < 15 && abs(b.x - cx) < Double(z.label.count) * 4.4 + 30 {
                 visible *= b.emphasis            // never write a name across a ring's label
             }
             // Under a face there is only room for a first name.
             guard visible > 0.03, let text = options.everyoneNamed ? b.face.first : b.face.label(options.names) else { continue }
-            var layer = g
-            layer.opacity = visible
-            layer.label(text, at: pt(b.x, b.y + r + 9), font: sans(r > 24 ? 12.5 : 11), color: Pal.paper.color(), anchor: .top, halo: Pal.ground.color())
+            p.save()
+            p.opacity *= visible
+            p.text(text, b.x, b.y + r + 9, .sans(r > 24 ? 12.5 : 11), Pal.paper.c(), anchor: .top, halo: Pal.ground.c())
+            p.restore()
         }
     }
 
     /// A flat portrait with one thin ring in its own colour. No gloss, no shadow.
-    private func face(_ g: inout GraphicsContext, _ b: Body, alpha: Double, _ options: DrawOptions) {
+    private func face(_ p: Painter, _ b: Body, alpha: Double, _ options: DrawOptions) {
         let r = b.radius * (1 + b.emphasis * 0.06 + b.pop * 0.06)
-        var layer = g
-        layer.opacity = alpha
+        p.save()
+        p.opacity *= alpha            // multiplied, so a picture inside a fading film chapter fades with it
         if b.memory {
-            var light = layer
-            light.blendMode = .plusLighter
-            light.glow(b.x, b.y, r + 16, Pal.memory, 0.22 + 0.04 * sin(time * 1.3))
+            p.additive = true
+            p.glow(b.x, b.y, r + 16, Pal.memory, 0.22 + 0.04 * sin(time * 1.3))
+            p.additive = false
         }
-        layer.fill(circle(b.x, b.y, r + 4), with: .color(Pal.ground.color()))
-        if options.photos, let image = b.face.image {
-            var clipped = layer
-            clipped.clip(to: circle(b.x, b.y, r))
-            clipped.draw(image, in: CGRect(x: b.x - r, y: b.y - r, width: 2 * r, height: 2 * r))
-        } else {
-            layer.fill(circle(b.x, b.y, r), with: .color(b.colour.color(0.16)))
-            if options.everyoneNamed {
-                layer.figure(b.x, b.y, r, b.colour, alpha: 0.75)
-            } else if options.names != .none {
-                layer.label(b.face.initials, at: pt(b.x, b.y + r * 0.02), font: serif(r * 0.78), color: b.colour.color())
-            }
-        }
-        layer.stroke(circle(b.x, b.y, r + 3.5), with: .color(b.colour.color(0.75 + 0.25 * b.emphasis)), lineWidth: 1.5 + b.emphasis * 1.2 + b.pop * 1.5)
+        p.disc(b.x, b.y, r + 4, Pal.ground.c())
+        p.portrait(b.face, x: b.x, y: b.y, r: r, colour: b.colour, options: options)
+        p.ring(b.x, b.y, r + 3.5, width: 1.5 + b.emphasis * 1.2 + b.pop * 1.5, b.colour.c(0.75 + 0.25 * b.emphasis))
+        p.restore()
     }
 }

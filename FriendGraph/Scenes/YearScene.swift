@@ -31,7 +31,6 @@ final class YearScene: VisualScene {
     }
 
     var footer: String { "53 weeks of one-to-one messages" }
-    var framesPerSecond: Double { time < 3.2 ? 60 : 15 }      // still, once the ribbons have swept in
     var detailKey: String { hovered.map { "row\($0)" } ?? "none" }
     var selectedPersonID: String? { hovered.map { people[$0].id } }
     var detail: Detail? {
@@ -53,8 +52,36 @@ final class YearScene: VisualScene {
     private func x(_ i: Int) -> Double { x0 + (x1 - x0) * Double(i) / Double(weeks - 1) }
     private func h(_ r: Int, _ i: Int) -> Double { min(19, sqrt(weekly[r][i]) * 1.55) }
 
-    func draw(_ g: inout GraphicsContext, _ options: DrawOptions) {
-        g.fill(Path(CGRect(x: 0, y: 0, width: 600, height: 540)), with: .color(Pal.ground.color()))
+    private let identity = UUID().uuidString
+
+    /// One person's ribbon as triangles: the outline eased between weeks, filled, with a soft glow beyond each edge.
+    private func ribbon(_ r: Int, _ y: Double, _ c: RGB) -> [(Double, Double, RGBA)] {
+        var outline: [(Double, Double)] = []
+        let steps = 5
+        for i in 0..<(weeks - 1) {
+            for k in 0..<steps {
+                let u = Double(k) / Double(steps), smooth = u * u * (3 - 2 * u)
+                outline.append((x(i) + (x(i + 1) - x(i)) * u, h(r, i) + (h(r, i + 1) - h(r, i)) * smooth))
+            }
+        }
+        outline.append((x(weeks - 1), h(r, weeks - 1)))
+        let body = c.c(0.78), edge = c.c(0.34), none = c.c(0), spread = 8.0
+        var corners: [(Double, Double, RGBA)] = []
+        corners.reserveCapacity(outline.count * 18)
+        for i in 0..<(outline.count - 1) {
+            let a = outline[i], b = outline[i + 1]
+            func band(_ ya0: Double, _ ya1: Double, _ yb0: Double, _ yb1: Double, _ c0: RGBA, _ c1: RGBA) {
+                corners.append((a.0, ya0, c0)); corners.append((b.0, yb0, c0)); corners.append((a.0, ya1, c1))
+                corners.append((b.0, yb0, c0)); corners.append((b.0, yb1, c1)); corners.append((a.0, ya1, c1))
+            }
+            band(y - a.1 - spread, y - a.1, y - b.1 - spread, y - b.1, none, edge)          // glow above
+            band(y - a.1, y + a.1, y - b.1, y + b.1, body, body)                              // the ribbon
+            band(y + a.1, y + a.1 + spread, y + b.1, y + b.1 + spread, edge, none)          // glow below
+        }
+        return corners
+    }
+
+    func paint(_ p: Painter, _ options: DrawOptions) {
         let reveal = x0 + (x1 - x0 + 40) * min(1, time / 2.6)
         for r in people.indices {
             let y = top + Double(r) * row, c = Pal.series[r % Pal.series.count]
@@ -62,34 +89,20 @@ final class YearScene: VisualScene {
             let text = faces[r].label(options.everyoneNamed && options.names != .full ? .first : options.names) ?? String(r + 1)
             // The margin holds about 13 characters at full size; longer names shrink a little, then lose their surname.
             let shown = text.count > 19 ? faces[r].first : text
-            g.label(shown, at: pt(x0 - 14, y), font: sans(shown.count > 13 ? 9.5 : 12), color: Pal.paper.color(0.85 * dim), anchor: .trailing)
-            var line = Path(); line.move(to: pt(x0, y)); line.addLine(to: pt(x1, y))
-            g.stroke(line, with: .color(c.color(0.16)), lineWidth: 1)
+            p.text(shown, x0 - 14, y, .sans(shown.count > 13 ? 9.5 : 12), Pal.paper.c(0.85 * dim), anchor: .trailing)
+            p.line(x0, y, x1, y, width: 1, c.c(0.16), round: false)
 
-            var ribbon = Path()
-            ribbon.move(to: pt(x0, y))
-            ribbon.addLine(to: pt(x(0), y - h(r, 0)))
-            for i in 1..<weeks {
-                let mid = (x(i - 1) + x(i)) / 2
-                ribbon.addCurve(to: pt(x(i), y - h(r, i)), control1: pt(mid, y - h(r, i - 1)), control2: pt(mid, y - h(r, i)))
-            }
-            ribbon.addLine(to: pt(x1, y))
-            ribbon.addLine(to: pt(x(weeks - 1), y + h(r, weeks - 1)))
-            for i in stride(from: weeks - 2, through: 0, by: -1) {
-                let mid = (x(i + 1) + x(i)) / 2
-                ribbon.addCurve(to: pt(x(i), y + h(r, i)), control1: pt(mid, y + h(r, i + 1)), control2: pt(mid, y + h(r, i)))
-            }
-            ribbon.closeSubpath()
-
-            var layer = g
-            layer.clip(to: Path(CGRect(x: 0, y: 0, width: reveal, height: 540)))
-            layer.blendMode = .plusLighter
-            layer.addFilter(.shadow(color: c.color(0.9 * dim), radius: 7))
             let pulse = 0.9 + sin(time * 0.9 + Double(r)) * 0.1
-            layer.fill(ribbon, with: .color(c.color(0.78 * pulse * dim)))
+            p.save()
+            p.clip(CGRect(x: 0, y: 0, width: reveal, height: 540))
+            p.additive = true
+            p.opacity *= pulse * dim
+            // The ribbon's shape never changes, so it lives on the GPU; only its brightness moves.
+            p.stored("ribbon-\(identity)-\(r)") { ribbon(r, y, c) }
+            p.restore()
         }
         for (w, name) in months {
-            g.label(name, at: pt(x(w), top + 10 * row - 8), font: sans(10), color: Pal.quiet.color())
+            p.text(name, x(w), top + 10 * row - 8, .sans(10), Pal.quiet.c())
         }
     }
 }

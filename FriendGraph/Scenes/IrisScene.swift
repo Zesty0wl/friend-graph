@@ -24,8 +24,6 @@ final class IrisScene: VisualScene {
     private var dragging = false, lastAngle = 0.0, lastTime = 0.0, moved = 0.0
     private var time = 0.0
     private let mostRows: Double
-    private var namesPicture: Image?
-    private var namesRotation = 0.0
 
     init(_ data: WatchData) {
         self.data = data
@@ -90,7 +88,6 @@ final class IrisScene: VisualScene {
     func select(named name: String) { pinned = strands.firstIndex { $0.view.name == name } }
 
     var footer: String { "Plain descriptions are read from Apple's internal names. Apple documents none of this." }
-    var framesPerSecond: Double { dragging || selected != nil ? 60 : 30 }
     var detailKey: String { selected.map { strands[$0].view.name } ?? "none" }
 
     var detail: Detail? {
@@ -143,101 +140,62 @@ final class IrisScene: VisualScene {
         }
     }
 
-    /// One strand's name, written along the strand from just beyond its tip.
-    private static func name(_ g: inout GraphicsContext, _ s: Strand, rotation: Double, around centre: Double, bright: Bool) {
-        let pupil = 50.0, reach = 196.0, limit = 352.0
-        let angle = rotation + s.angle + (bright ? s.offset : 0), r1 = pupil + 8, start = r1 + (reach - r1) * s.length + (bright ? 18 : 0) + 9
-        let room = Int((limit - start) / 4.15)
-        guard room > 4 else { return }
-        let name = s.view.name.count > room ? String(s.view.name.prefix(room - 1)) + "…" : s.view.name
-        let c = Pal.categories[min(s.view.cat, Pal.categories.count - 1)], flipped = cos(angle) < 0
-        var along = g
-        along.translateBy(x: centre + cos(angle) * start, y: centre + sin(angle) * start)
-        along.rotate(by: .radians(flipped ? angle + .pi : angle))
-        along.draw(Text(name).font(.system(size: 7.6, weight: bright ? .semibold : .regular))
-            .foregroundStyle(RGB.mix(c, Pal.paper, bright ? 0.5 : 0.35).color(bright ? 1 : s.view.rows == 0 ? 0.5 : 0.82)),
-                   at: .zero, anchor: flipped ? .trailing : .leading)
-    }
-
-    func draw(_ g: inout GraphicsContext, _ options: DrawOptions) {
+    func paint(_ p: Painter, _ options: DrawOptions) {
         let sel = selected
-        g.fill(Path(CGRect(x: 0, y: 0, width: 820, height: 820)), with: .color(Pal.ground.color()))
         let pr = pupil + sin(time * 0.55) * 3 + (sel != nil ? 5 : 0), r1 = pr + 8
-        g.fill(circle(cx, cy, reach + 10), with: .radialGradient(Gradient(stops: [
-            .init(color: Pal.amber.color(0.16), location: 0), .init(color: RGB(79, 214, 224).color(0.07), location: 0.35),
-            .init(color: Pal.ground.color(0), location: 1),
-        ]), center: pt(cx, cy), startRadius: pr, endRadius: reach + 10))
+        p.radial(cx, cy, from: pr, to: reach + 10, stops: [(0, Pal.amber.c(0.16)), (0.35, RGB(79, 214, 224).c(0.07)), (1, Pal.ground.c(0))])
 
-        var light = g
-        light.blendMode = .plusLighter
+        p.additive = true
         for (i, s) in strands.enumerated() {
             let angle = rotation + s.angle + s.offset, r2 = r1 + (reach - r1) * s.length + s.emphasis * 18
             let c = Pal.categories[min(s.view.cat, Pal.categories.count - 1)], bend = s.curl - s.velocity * 0.035
             let a = pt(cx + cos(angle) * r1, cy + sin(angle) * r1), b = pt(cx + cos(angle) * r2, cy + sin(angle) * r2)
             let rm = (r1 + r2) / 2, m = pt(cx + cos(angle + bend) * rm, cy + sin(angle + bend) * rm)
             let alpha = (0.22 + 0.6 * s.heat) * (sel != nil && sel != i ? 0.4 : 1) + s.emphasis * 0.6
-            var path = Path(); path.move(to: a); path.addQuadCurve(to: b, control: m)
-            light.stroke(path, with: .linearGradient(Gradient(stops: [
-                .init(color: RGB(255, 220, 170).color(alpha * 0.8), location: 0), .init(color: c.color(alpha), location: 0.3),
-                .init(color: c.color(alpha * 0.25), location: 1),
-            ]), startPoint: a, endPoint: b), style: StrokeStyle(lineWidth: 2.1 + s.emphasis * 2.2, lineCap: .round))
+            let warm = RGB(255, 220, 170).c(alpha * 0.8), near = c.c(alpha), far = c.c(alpha * 0.25)
+            p.curve(a, m, b, width: 2.1 + s.emphasis * 2.2, warm, near, far, at: 0.3)
             if s.heat == 1 {                         // ran in the last hour: a spark runs along it
                 let u = (time * 0.45 + s.phase).truncatingRemainder(dividingBy: 1), q = 1 - u
                 let x = q * q * a.x + 2 * q * u * m.x + u * u * b.x, y = q * q * a.y + 2 * q * u * m.y + u * u * b.y
-                light.fill(circle(x, y, 1.8), with: .color(RGB(255, 245, 225).color(0.9 * sin(u * .pi))))
+                p.disc(x, y, 1.8, RGB(255, 245, 225).c(0.9 * sin(u * .pi)))
             }
             // The tip shows how much the strand holds: a bigger dot for more records, a hollow one for none.
             let tip = min(1, alpha + 0.2)
             if let rows = s.view.rows, rows == 0 {
-                light.stroke(circle(b.x, b.y, 2.6 + s.emphasis * 2), with: .color(c.color(tip * 0.9)), lineWidth: 1)
+                p.ring(b.x, b.y, 2.6 + s.emphasis * 2, width: 1, c.c(tip * 0.9))
             } else {
                 let size = s.view.rows.map { 1.6 + 4.2 * log10(1 + Double($0)) / mostRows } ?? 1.8
-                light.fill(circle(b.x, b.y, size + s.emphasis * 2.5), with: .color(c.color(tip)))
+                p.disc(b.x, b.y, size + s.emphasis * 2.5, c.c(tip))
             }
         }
-        // macOS's own name for each strand, written along it from the tip outwards. Drawing a hundred
-        // rotated names every frame is the most expensive thing in the app, so they are drawn once
-        // into a picture, which is then simply turned with the iris. It is redrawn only when the
-        // iris has turned far enough that some names need flipping to stay the right way up.
-        if namesPicture == nil || abs(rotation - namesRotation) > 0.3 {
-            namesRotation = rotation
-            let snapshot = strands, turned = rotation
-            namesPicture = MainActor.assumeIsolated {
-                let renderer = ImageRenderer(content: Canvas { context, _ in
-                    for s in snapshot { Self.name(&context, s, rotation: turned, around: 410, bright: false) }
-                }.frame(width: 820, height: 820))
-                renderer.scale = 2.5
-                return renderer.cgImage.map { Image(decorative: $0, scale: 2.5) }
-            }
-        }
-        if let picture = namesPicture {
-            var ring = g
-            ring.opacity = sel == nil ? 1 : 0.3
-            ring.translateBy(x: cx, y: cy)
-            ring.rotate(by: .radians(rotation - namesRotation))
-            ring.draw(picture, in: CGRect(x: -410, y: -410, width: 820, height: 820))
-        }
-        if let chosen = sel {
-            var top = g
-            top.translateBy(x: cx - 410, y: cy - 410)
-            Self.name(&top, strands[chosen], rotation: rotation, around: 410, bright: true)
-        }
-        g.fill(circle(cx, cy, pr), with: .color(RGB(2, 2, 4).color()))
-        g.fill(circle(cx - 22, cy - 26, 24), with: .radialGradient(Gradient(stops: [
-            .init(color: Color.white.opacity(0.8), location: 0), .init(color: Color.white.opacity(0.16), location: 0.35),
-            .init(color: Color.white.opacity(0), location: 1),
-        ]), center: pt(cx - 22, cy - 26), startRadius: 0, endRadius: 24))
+        p.additive = false
 
+        // macOS's own name for each strand, written along it from the tip outwards.
+        for (i, s) in strands.enumerated() {
+            let angle = rotation + s.angle + s.offset, start = r1 + (reach - r1) * s.length + s.emphasis * 18 + 9
+            let room = Int((nameLimit - start) / 4.15)
+            guard room > 4 else { continue }
+            let name = s.view.name.count > room ? String(s.view.name.prefix(room - 1)) + "…" : s.view.name
+            let c = Pal.categories[min(s.view.cat, Pal.categories.count - 1)], flipped = cos(angle) < 0
+            let alpha = sel == nil ? (s.view.rows == 0 ? 0.5 : 0.82) : (sel == i ? 1 : 0.28)
+            p.text(name, cx + cos(angle) * start, cy + sin(angle) * start, .sans(7.6, sel == i ? .semibold : .regular),
+                   RGB.mix(c, Pal.paper, sel == i ? 0.5 : 0.35).c(alpha), anchor: flipped ? .trailing : .leading, angle: flipped ? angle + .pi : angle)
+        }
+
+        p.disc(cx, cy, pr, RGB(2, 2, 4).c())
+        p.radial(cx - 22, cy - 26, from: 0, to: 24, stops: [(0, RGBA(r: 1, g: 1, b: 1, a: 0.8)), (0.35, RGBA(r: 1, g: 1, b: 1, a: 0.16)), (1, RGBA(r: 1, g: 1, b: 1, a: 0))])
+
+        let groupStyle = TextStyle.sans(12, .medium)
         for (cat, angles) in middles {
             guard let first = angles.first, let last = angles.last else { continue }
             let angle = rotation + (first + last) / 2, co = cos(angle)
             let on = sel.map { strands[$0].view.cat == cat } ?? false
-            let anchor: UnitPoint = co > 0.35 ? .leading : co < -0.35 ? .trailing : .center
-            let text = "\(data.cats[min(cat, data.cats.count - 1)]) \(angles.count)", approx = Double(text.count) * 6.2
+            let anchor: Anchor = co > 0.35 ? .leading : co < -0.35 ? .trailing : .centre
+            let text = "\(data.cats[min(cat, data.cats.count - 1)]) \(angles.count)", wide = p.measure(text, groupStyle).width
             var x = cx + co * (nameLimit + 14)
-            if anchor == .leading { x = min(x, 812 - approx) } else if anchor == .trailing { x = max(x, 8 + approx) } else { x = max(8 + approx / 2, min(812 - approx / 2, x)) }
-            g.label(text, at: pt(x, max(14, min(806, cy + sin(angle) * (nameLimit + 22)))), font: sans(12, .medium),
-                    color: Pal.categories[min(cat, Pal.categories.count - 1)].color(sel != nil && !on ? 0.45 : 1), anchor: anchor)
+            if anchor == .leading { x = min(x, 812 - wide) } else if anchor == .trailing { x = max(x, 8 + wide) } else { x = max(8 + wide / 2, min(812 - wide / 2, x)) }
+            p.text(text, x, max(14, min(806, cy + sin(angle) * (nameLimit + 22))), groupStyle,
+                   Pal.categories[min(cat, Pal.categories.count - 1)].c(sel != nil && !on ? 0.45 : 1), anchor: anchor)
         }
     }
 }

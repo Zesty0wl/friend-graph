@@ -54,7 +54,7 @@ struct MainView: View {
         HStack(spacing: 0) {
             Group {
                 if let scene = scenes[model.tab] {
-                    SceneCanvas(scene: scene, options: DrawOptions(names: .first, photos: true)) { refresh(scene) }
+                    MetalSceneView(scene: scene, options: DrawOptions(names: .first, photos: true)) { refresh(scene) }
                         .id(model.tab)
                         .accessibilityLabel(SceneBuilder.title(model.tab))
                 } else {

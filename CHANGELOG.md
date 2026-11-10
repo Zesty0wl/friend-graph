@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 (10 November 2026)
+
+### Drawn on the GPU
+- Every picture, the share cards and the film are now drawn with Metal. Strands are shaped on the GPU, and shapes that never change (the weekly ribbons) stay in GPU memory.
+- The live pictures use a third to a half of the processor time they did. My circle went from about 43% of one core to about 12%.
+- The film renders in about 7 seconds instead of 12.
+
+### Fixes
+- In the moving timeline, a crowded stack of faces now closes up to stay inside the picture.
+
 ## 0.2.0 (10 November 2026)
 
 ### My Film

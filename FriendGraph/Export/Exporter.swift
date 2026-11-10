@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
+import Metal
 
 /// Turns a picture into something to share: a PNG, or a short video. Everything is rendered on
 /// this Mac from a fresh copy of the scene, with the privacy choices from the share sheet applied.
@@ -15,38 +16,41 @@ enum Exporter {
         var options: DrawOptions { DrawOptions(names: names, photos: photos) }
     }
 
-    /// The finished card: the picture, its title, and the app's name.
-    struct Card: View {
-        let scene: any VisualScene
-        let request: Request
+    /// Paints the finished card: the picture, its title, and the app's name.
+    static func paintCard(_ p: Painter, scene: any VisualScene, request: Request) {
+        let size = request.size, caption = request.tall ? 300.0 : 150.0
+        let area = request.tall ? size.width : size.height - caption
+        let top = request.tall ? (size.height - area - caption) / 2 : 0
+        let design = scene.designSize, scale = min(size.width / design.width, area / design.height)
+        p.save()
+        p.translate((size.width - design.width * scale) / 2, top + (area - design.height * scale) / 2)
+        p.scale(scale)
+        p.clip(CGRect(origin: .zero, size: design))
+        scene.paint(p, request.options)
+        p.restore()
 
-        var body: some View {
-            let size = request.size, caption = request.tall ? 300.0 : 150.0
-            VStack(spacing: 0) {
-                if request.tall { Spacer(minLength: 0) }
-                Canvas { context, area in
-                    let design = scene.designSize, scale = min(area.width / design.width, area.height / design.height)
-                    context.translateBy(x: (area.width - design.width * scale) / 2, y: (area.height - design.height * scale) / 2)
-                    context.scaleBy(x: scale, y: scale)
-                    context.clip(to: Path(CGRect(origin: .zero, size: design)))
-                    scene.draw(&context, request.options)
-                }
-                .frame(width: size.width, height: request.tall ? size.width : size.height - caption)
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(SceneBuilder.title(request.tab))
-                        .font(serif(request.tall ? 76 : 54)).foregroundStyle(Pal.paper.color())
-                        .lineLimit(2).minimumScaleFactor(0.6)
-                    Text("FRIEND GRAPH")
-                        .font(sans(request.tall ? 24 : 19)).tracking(2.4).foregroundStyle(Pal.quiet.color())
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 56)
-                .frame(height: caption, alignment: .top)
-                if request.tall { Spacer(minLength: 0) }
-            }
-            .frame(width: size.width, height: size.height)
-            .background(Pal.ground.color())
+        // The title, on two lines if it will not fit on one.
+        let style = TextStyle.serif(request.tall ? 76 : 54), room = size.width - 112
+        var lines: [String] = [], current = ""
+        for word in SceneBuilder.title(request.tab).split(separator: " ").map(String.init) {
+            let candidate = current.isEmpty ? word : current + " " + word
+            if p.measure(candidate, style).width > room, !current.isEmpty { lines.append(current); current = word } else { current = candidate }
         }
+        if !current.isEmpty { lines.append(current) }
+        let lineHeight = style.size * 1.14
+        var y = top + area + (lines.count > 1 && !request.tall ? -lineHeight * 0.55 : 0)
+        for line in lines { p.text(line, 56, y, style, Pal.paper.c(), anchor: .topLeading); y += lineHeight }
+        p.text("FRIEND GRAPH", 56, y + 12, .sans(request.tall ? 24 : 19, tracking: 2.4), Pal.quiet.c(), anchor: .topLeading)
+    }
+
+    /// Draws one frame on the GPU into a picture of the given size.
+    static func render(_ size: CGSize, _ body: (Painter) -> Void) -> MTLTexture? {
+        guard let renderer = Renderer.shared, let target = renderer.canvas(width: Int(size.width), height: Int(size.height)) else { return nil }
+        let painter = renderer.scratch
+        painter.begin(pixels: size)
+        body(painter)
+        renderer.draw(painter, into: target, wait: true)
+        return target
     }
 
     /// A fresh scene, moved on to the moment worth showing.
@@ -59,10 +63,8 @@ enum Exporter {
     }
 
     static func frame(_ scene: any VisualScene, _ request: Request) -> CGImage? {
-        let renderer = ImageRenderer(content: Card(scene: scene, request: request))
-        renderer.scale = 1
-        renderer.isOpaque = true
-        return renderer.cgImage
+        guard let texture = render(request.size, { paintCard($0, scene: scene, request: request) }) else { return nil }
+        return Renderer.shared?.image(from: texture)
     }
 
     static func picture(_ request: Request, model: AppModel) -> CGImage? {
@@ -98,52 +100,18 @@ enum Exporter {
         // The circle opens with everyone blooming out from the centre, which is worth keeping in a video.
         guard let scene = scene(for: request, model: model, settle: request.tab == .journey ? seconds : 0.6) else { throw Failure.nothingToDraw }
         if let journey = scene as? JourneyScene { journey.jump(secondsBeforeEnd: seconds + 0.05) }
-        let url = temporaryURL(request, video: true)
-        try? FileManager.default.removeItem(at: url)
-        let size = request.size, fps = 30, frames = Int(seconds) * fps
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(size.width), AVVideoHeightKey: Int(size.height),
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 9_000_000],
-        ])
-        input.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: Int(size.width), kCVPixelBufferHeightKey as String: Int(size.height),
-        ])
-        writer.add(input)
-        guard writer.startWriting() else { throw Failure.writer(writer.error?.localizedDescription ?? "could not start") }
-        writer.startSession(atSourceTime: .zero)
-
-        for index in 0..<frames {
-            try Task.checkCancellation()
+        let url = temporaryURL(request, video: true), fps = 30
+        try await encode(size: request.size, frames: Int(seconds) * fps, fps: fps, to: url, progress: progress) {
             scene.advance(by: 1.0 / Double(fps))
-            guard let image = frame(scene, request), let pool = adaptor.pixelBufferPool else { throw Failure.nothingToDraw }
-            var made: CVPixelBuffer?
-            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made)
-            guard let buffer = made else { throw Failure.writer("no frame buffer") }
-            CVPixelBufferLockBaseAddress(buffer, [])
-            if let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: Int(size.width), height: Int(size.height),
-                                       bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                       bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
-                context.draw(image, in: CGRect(origin: .zero, size: size))
-            }
-            CVPixelBufferUnlockBaseAddress(buffer, [])
-            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(4)) }
-            adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps)))
-            progress(Double(index + 1) / Double(frames))
-            await Task.yield()
+            return render(request.size) { paintCard($0, scene: scene, request: request) }
         }
-        input.markAsFinished()
-        await writer.finishWriting()
-        if writer.status != .completed { throw Failure.writer(writer.error?.localizedDescription ?? "did not finish") }
         return url
     }
 }
 
 extension Exporter {
     /// Encodes frames drawn one at a time into an H.264 file.
-    static func encode(size: CGSize, frames: Int, fps: Int, to url: URL, progress: @escaping (Double) -> Void, frame: (Int) -> CGImage?) async throws {
+    static func encode(size: CGSize, frames: Int, fps: Int, to url: URL, progress: @escaping (Double) -> Void, frame: () -> MTLTexture?) async throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -160,16 +128,13 @@ extension Exporter {
         writer.startSession(atSourceTime: .zero)
         for index in 0..<frames {
             try Task.checkCancellation()
-            guard let image = frame(index), let pool = adaptor.pixelBufferPool else { throw Failure.nothingToDraw }
+            guard let picture = frame(), let pool = adaptor.pixelBufferPool, let renderer = Renderer.shared else { throw Failure.nothingToDraw }
             var made: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made)
             guard let buffer = made else { throw Failure.writer("no frame buffer") }
+            // The frame is already laid out as the video wants it, so it is copied straight across.
             CVPixelBufferLockBaseAddress(buffer, [])
-            if let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: Int(size.width), height: Int(size.height),
-                                       bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                       bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
-                context.draw(image, in: CGRect(origin: .zero, size: size))
-            }
+            if let base = CVPixelBufferGetBaseAddress(buffer) { renderer.read(picture, into: base, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer)) }
             CVPixelBufferUnlockBaseAddress(buffer, [])
             while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(4)) }
             adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps)))
@@ -229,12 +194,9 @@ extension Exporter {
         let silent = base.appendingPathComponent("picture.mp4"), music = base.appendingPathComponent("music.m4a")
         let final = base.appendingPathComponent("My year.mp4")
         let frames = Int(Film.length) * Film.fps
-        try await encode(size: Film.size, frames: frames, fps: Film.fps, to: silent, progress: { progress(0.09 + 0.86 * $0) }) { _ in
+        try await encode(size: Film.size, frames: frames, fps: Film.fps, to: silent, progress: { progress(0.09 + 0.86 * $0) }) {
             film.advance(by: 1.0 / Double(Film.fps))
-            let renderer = ImageRenderer(content: Canvas { context, _ in film.draw(&context) }.frame(width: Film.size.width, height: Film.size.height))
-            renderer.scale = 1
-            renderer.isOpaque = true
-            return renderer.cgImage
+            return render(Film.size) { film.paint($0) }
         }
         do { try Soundtrack.write(starts: Film.starts, length: Film.length, cues: Film.cues(script: script, arrivals: film.arrivals), to: music) }
         catch { throw Failure.writer("The music could not be made: \(error.localizedDescription)") }

@@ -80,14 +80,15 @@ struct Face {
     let name: String
     let first: String
     let initials: String
-    let image: Image?
+    /// A square photo, ready for the picture atlas.
+    let photo: CGImage?
     let standing: Standing
     let relationship: Relationship
 
     init(_ p: Person, _ decisions: Decisions) {
         id = p.id; name = p.name; first = p.first
         initials = p.initials.first.map { $0.isLetter } == true ? p.initials : "#"
-        image = p.photo.flatMap(Face.square)
+        photo = p.photo.flatMap(Face.squareImage)
         standing = decisions.standing(of: p)
         relationship = decisions.relationship(of: p)
     }
@@ -102,16 +103,16 @@ struct Face {
     }
 
     /// Decodes, downsamples and centre-crops a photo to a square.
-    static func square(_ data: Data) -> Image? {
+    static func squareImage(_ data: Data) -> CGImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
-                                        kCGImageSourceThumbnailMaxPixelSize: 320]
+                                        kCGImageSourceThumbnailMaxPixelSize: 384]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         let side = min(image.width, image.height)
-        let rect = CGRect(x: (image.width - side) / 2, y: (image.height - side) / 2, width: side, height: side)
-        guard let cropped = image.cropping(to: rect) else { return nil }
-        return Image(decorative: cropped, scale: 1)
+        return image.cropping(to: CGRect(x: (image.width - side) / 2, y: (image.height - side) / 2, width: side, height: side))
     }
+
+    static func square(_ data: Data) -> Image? { squareImage(data).map { Image(decorative: $0, scale: 1) } }
 }
 
 /// One of the four pictures. A scene owns its own motion, so the same code draws the live view,
@@ -119,7 +120,8 @@ struct Face {
 protocol VisualScene: AnyObject {
     var designSize: CGSize { get }
     func advance(by dt: Double)
-    func draw(_ g: inout GraphicsContext, _ options: DrawOptions)
+    /// Describes this frame to the painter, in the picture's own coordinates.
+    func paint(_ p: Painter, _ options: DrawOptions)
     func pointerDown(_ p: CGPoint)
     func pointerMoved(_ p: CGPoint)
     func pointerUp(_ p: CGPoint)
@@ -174,31 +176,28 @@ func minutesText(_ m: Double?) -> String {
     return "\(Int((m / 60).rounded())) hours"
 }
 
-extension GraphicsContext {
-    /// Text with an optional halo of background colour, so it stays readable over anything.
-    func label(_ string: String, at p: CGPoint, font: Font, color: Color, anchor: UnitPoint = .center,
-               halo: Color? = nil, tracking: Double = 0) {
-        if let halo {
-            let under = resolve(Text(string).font(font).tracking(tracking).foregroundStyle(halo))
-            for k in 0..<8 {
-                let a = Double(k) / 8 * TAU
-                draw(under, at: CGPoint(x: p.x + cos(a) * 2.2, y: p.y + sin(a) * 2.2), anchor: anchor)
-            }
-        }
-        draw(Text(string).font(font).tracking(tracking).foregroundStyle(color), at: p, anchor: anchor)
-    }
-
-    func glow(_ x: Double, _ y: Double, _ r: Double, _ c: RGB, _ alpha: Double) {
-        fill(circle(x, y, r), with: .radialGradient(Gradient(colors: [c.color(alpha), c.color(0)]), center: pt(x, y), startRadius: 0, endRadius: r))
+extension RGBA {
+    static func mix(_ a: RGBA, _ b: RGBA, _ f: Double) -> RGBA {
+        let t = Float(max(0, min(1, f)))
+        return RGBA(r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t)
     }
 }
 
-extension GraphicsContext {
-    /// A plain head-and-shoulders figure inside a disc, for someone with no photo.
-    func figure(_ x: Double, _ y: Double, _ r: Double, _ colour: RGB, alpha: Double = 1) {
-        var inside = self
-        inside.clip(to: circle(x, y, r))
-        inside.fill(circle(x, y - r * 0.2, r * 0.3), with: .color(colour.color(alpha)))
-        inside.fill(Path(ellipseIn: CGRect(x: x - r * 0.56, y: y + r * 0.22, width: r * 1.12, height: r * 1.3)), with: .color(colour.color(alpha)))
+extension Painter {
+    /// A person's disc: their photo, or a tinted disc with a figure or their initials. Drawn at the current opacity.
+    func portrait(_ face: Face, x: Double, y: Double, r: Double, colour: RGB, options: DrawOptions, initialsFace: TextStyle.Face = .serif) {
+        if options.photos, let photo = face.photo {
+            self.photo(face.id, photo, x: x, y: y, r: r)
+        } else {
+            disc(x, y, r, colour.c(0.16))
+            if options.everyoneNamed {
+                figure(x, y, r, colour.c(0.75))
+            } else if options.names != .none {
+                // Initials are set once at a fixed size and scaled, so a growing disc does not need new text every frame.
+                save(); translate(x, y + r * 0.02); scale(r * 0.78 / 30)
+                text(face.initials, 0, 0, TextStyle(face: initialsFace, size: 30, weight: initialsFace == .sans ? .medium : .regular), colour.c())
+                restore()
+            }
+        }
     }
 }

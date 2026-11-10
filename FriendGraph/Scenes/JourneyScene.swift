@@ -130,54 +130,49 @@ final class JourneyScene: VisualScene {
     }
     func pointerUp(_ p: CGPoint) { held = false }
 
-    func draw(_ g: inout GraphicsContext, _ options: DrawOptions) {
+    func paint(_ p: Painter, _ options: DrawOptions) {
         let w = day(at: play)
         func x(_ d: Double) -> Double { cx + (d - w) * pxPerDay }
-        g.fill(Path(CGRect(x: 0, y: 0, width: width, height: height)), with: .color(Pal.ground.color()))
         for s in stars {
             let sx = ((s.0 - w / 7 * 46 * 0.35 * s.2).truncatingRemainder(dividingBy: 700) + 700).truncatingRemainder(dividingBy: 700) - 50
-            g.fill(Path(CGRect(x: sx, y: s.1, width: 1.2, height: 1.2)), with: .color(Pal.paper.color(0.10 + 0.18 * s.2)))
+            p.rect(sx, s.1, 1.2, 1.2, Pal.paper.c(0.10 + 0.18 * s.2))
         }
-        // My path: travelled behind me, faint ahead.
-        var behind = Path(); behind.move(to: pt(0, cy)); behind.addLine(to: pt(cx, cy))
-        g.stroke(behind, with: .linearGradient(Gradient(colors: [RGB(255, 244, 220).color(0), RGB(255, 244, 220).color(0.5)]),
-                                               startPoint: pt(0, cy), endPoint: pt(cx, cy)), lineWidth: 1.5)
-        var ahead = Path(); ahead.move(to: pt(cx, cy)); ahead.addLine(to: pt(width, cy))
-        g.stroke(ahead, with: .color(Pal.paper.color(0.10)), style: StrokeStyle(lineWidth: 1.5, dash: [2, 7]))
+        // My path: travelled behind me, faint and dotted ahead.
+        p.line(0, cy, cx, cy, width: 1.5, RGB(255, 244, 220).c(0), RGB(255, 244, 220).c(0.5), round: false)
+        var dash = cx + 9
+        while dash < width { p.line(dash, cy, dash + 2, cy, width: 1.5, Pal.paper.c(0.10), round: false); dash += 9 }
 
-        var light = g
-        light.blendMode = .plusLighter
+        p.additive = true
         let step = trail / 150
         var heads: [(Int, Double, Double, Double, Double, RGB)] = []
-        for p in faces.indices.reversed() {
-            let colour = Pal.series[p % Pal.series.count]
-            let rest = Double(last[p]) + 3
-            let fade = memory[p] ? max(0, min(1, (w - rest) / 21)) : 0
+        for person in faces.indices.reversed() {
+            let colour = Pal.series[person % Pal.series.count]
+            let rest = Double(last[person]) + 3
+            let fade = memory[person] ? max(0, min(1, (w - rest) / 21)) : 0
             let ease = fade * fade * (3 - 2 * fade)
             // The trail: where they have been alongside me.
-            let end = memory[p] ? min(w, rest) : w
+            let end = memory[person] ? min(w, rest) : w
             var k = max(0, w - trail)
             while k < end {
-                let a = activity(p, k), f = 1 - (w - k) / trail
+                let a = activity(person, k), f = 1 - (w - k) / trail
                 if a > 0.004 {
                     let k2 = min(end, k + step * 1.5)
-                    var seg = Path(); seg.move(to: pt(x(k), y(p, k))); seg.addLine(to: pt(x(k2), y(p, k2)))
-                    light.stroke(seg, with: .color(colour.color(f * f * (0.08 + 0.75 * a))), style: StrokeStyle(lineWidth: 0.8 + a * 4.2, lineCap: .round))
+                    p.line(x(k), y(person, k), x(k2), y(person, k2), width: 0.8 + a * 4.2, colour.c(f * f * (0.08 + 0.75 * a)))
                 }
                 k += step
             }
-            let a = activity(p, w), visible = min(1, a / 0.05)
-            if visible <= 0.01 && !(memory[p] && fade > 0) { continue }
-            var px = cx, py = y(p, w), r = (2 + a * 4.5) * (0.4 + 0.6 * visible), alpha = (0.25 + 0.75 * a) * visible, c = colour
-            if memory[p] && fade > 0 {           // stays as a steady light instead of drifting off
-                let y0 = y(p, rest), a0 = activity(p, rest)
+            let a = activity(person, w), visible = min(1, a / 0.05)
+            if visible <= 0.01 && !(memory[person] && fade > 0) { continue }
+            var px = cx, py = y(person, w), r = (2 + a * 4.5) * (0.4 + 0.6 * visible), alpha = (0.25 + 0.75 * a) * visible, c = colour
+            if memory[person] && fade > 0 {           // stays as a steady light instead of drifting off
+                let y0 = y(person, rest), a0 = activity(person, rest)
                 px = cx + ease * 56; py = y0 + (104 - y0) * ease
                 r = (2 + a0 * 4.5) * (1 - ease) + 3 * ease
                 alpha = (0.25 + 0.75 * a0) * (1 - ease) + (0.8 + sin(wall * 1.3) * 0.08) * ease
                 if ease > 0.5 { c = Pal.memory }
             }
-            light.glow(px, py, r * 4.5, c, 0.45 * alpha)
-            heads.append((p, px, py, r, alpha, c))
+            p.glow(px, py, r * 4.5, c, 0.45 * alpha)
+            heads.append((person, px, py, r, alpha, c))
         }
         // Faces that land on top of each other are eased apart, away from my line, so every name can be read.
         for above in [true, false] {
@@ -191,35 +186,32 @@ final class JourneyScene: VisualScene {
                 }
                 previous = abs(heads[i].2 - cy) + size - 9
             }
+            // If the stack would run off the picture, close it up evenly so everyone stays in view.
+            let limit = (above ? cy : height - cy) - 26
+            if let furthest = column.map({ abs(heads[$0].2 - cy) }).max(), furthest > limit {
+                for i in column { heads[i].2 = cy + (heads[i].2 - cy) * limit / furthest }
+            }
         }
-        for h in heads.sorted(by: { $0.4 < $1.4 }) { head(&g, faces[h.0], h.1, h.2, h.3, h.4, h.5, options) }
-        light.fill(circle(cx, cy, 30), with: .radialGradient(Gradient(stops: [
-            .init(color: RGB(255, 250, 235).color(1), location: 0), .init(color: RGB(255, 220, 160).color(0.5), location: 0.2),
-            .init(color: Pal.amber.color(0), location: 1),
-        ]), center: pt(cx, cy), startRadius: 0, endRadius: 30))
-        g.fill(circle(cx, cy, 5), with: .color(RGB(255, 250, 240).color()))
+        p.radial(cx, cy, from: 0, to: 30, stops: [(0, RGB(255, 250, 235).c(1)), (0.2, RGB(255, 220, 160).c(0.5)), (1, Pal.amber.c(0))])
+        p.additive = false
+        for h in heads.sorted(by: { $0.4 < $1.4 }) { head(p, faces[h.0], h.1, h.2, h.3, h.4, h.5, options) }
+        p.disc(cx, cy, 5, RGB(255, 250, 240).c())
 
         let date = firstDay.addingTimeInterval(max(0, min(Double(n - 1), w)) * 86400 + 43200)
-        g.label(date.formatted(.dateTime.month(.wide).year()), at: pt(40, 52), font: serif(26), color: Pal.paper.color(), anchor: .bottomLeading)
+        p.text(date.formatted(.dateTime.month(.wide).year()), 40, 52, .serif(26), Pal.paper.c(), anchor: .bottomLeading)
     }
 
-    /// A face (or initials) and a name beside it.
-    private func head(_ g: inout GraphicsContext, _ face: Face, _ x: Double, _ y: Double, _ r: Double, _ alpha: Double, _ colour: RGB, _ options: DrawOptions) {
+    /// A face and a name beside it.
+    private func head(_ p: Painter, _ face: Face, _ x: Double, _ y: Double, _ r: Double, _ alpha: Double, _ colour: RGB, _ options: DrawOptions) {
         let radius = 9 + r * 1.5
-        var layer = g
-        layer.opacity = min(1, alpha < 0.05 ? alpha * 8 : 0.4 + alpha)
-        layer.fill(circle(x, y, radius), with: .color(RGB(21, 21, 28).color()))
-        if options.photos, let image = face.image {
-            var clipped = layer
-            clipped.clip(to: circle(x, y, radius))
-            clipped.draw(image, in: CGRect(x: x - radius, y: y - radius, width: 2 * radius, height: 2 * radius))
-        } else if options.names != .none {
-            layer.label(face.initials, at: pt(x, y + 0.5), font: sans(radius * 0.8, .medium), color: colour.color())
+        p.save()
+        p.opacity *= min(1, alpha < 0.05 ? alpha * 8 : 0.4 + alpha)
+        p.disc(x, y, radius, RGB(21, 21, 28).c())
+        p.portrait(face, x: x, y: y, r: radius, colour: colour, options: options, initialsFace: .sans)
+        p.ring(x, y, radius, width: 1.5, colour.c())
+        if !(options.names == .initials && (!options.photos || face.photo == nil)), let text = face.label(options.names) {
+            p.text(text, x + radius + 7, y + 0.5, .sans(12), Pal.paper.c(), anchor: .leading)
         }
-        layer.stroke(circle(x, y, radius), with: .color(colour.color()), lineWidth: 1.5)
-        if options.names == .initials && (!options.photos || face.image == nil) { return }
-        if let text = face.label(options.names) {
-            layer.label(text, at: pt(x + radius + 7, y + 0.5), font: sans(12), color: Pal.paper.color(), anchor: .leading)
-        }
+        p.restore()
     }
 }

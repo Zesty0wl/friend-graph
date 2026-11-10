@@ -135,173 +135,174 @@ final class Film {
 
     /// Centred, wrapped text: lines are broken by measuring, then each is drawn centred. Returns the height it took.
     @discardableResult
-    private func words(_ g: inout GraphicsContext, _ string: String, y: Double, font: Font, color: Color, width: Double = 900) -> Double {
-        func measure(_ line: String) -> CGSize { g.resolve(Text(line).font(font)).measure(in: CGSize(width: 4000, height: 1000)) }
+    private func words(_ p: Painter, _ string: String, y: Double, style: TextStyle, colour: RGBA, width: Double = 900) -> Double {
         var lines: [String] = [], current = ""
         for word in string.split(separator: " ").map(String.init) {
             let candidate = current.isEmpty ? word : current + " " + word
-            if measure(candidate).width > width, !current.isEmpty { lines.append(current); current = word } else { current = candidate }
+            if p.measure(candidate, style).width > width, !current.isEmpty { lines.append(current); current = word } else { current = candidate }
         }
         if !current.isEmpty { lines.append(current) }
-        let lineHeight = measure("Ag").height * 1.12
-        for (i, line) in lines.enumerated() {
-            g.label(line, at: pt(540, y + Double(i) * lineHeight), font: font, color: color, anchor: .top)
-        }
+        let lineHeight = p.measure("Ag", style).height * 1.12
+        for (i, line) in lines.enumerated() { p.text(line, 540, y + Double(i) * lineHeight, style, colour, anchor: .top) }
         return Double(lines.count) * lineHeight
     }
 
-    func draw(_ g: inout GraphicsContext) {
+    func paint(_ p: Painter) {
         let t = time, index = chapter(at: t), local = t - Self.starts[index], span = end(of: index) - Self.starts[index]
-        g.fill(Path(CGRect(origin: .zero, size: Self.size)), with: .color(Pal.ground.color()))
         for s in stars {
-            g.fill(Path(CGRect(x: s.0, y: (s.1 - t * 6 * s.2).truncatingRemainder(dividingBy: 1920) + (s.1 - t * 6 * s.2 < 0 ? 1920 : 0), width: 2, height: 2)),
-                   with: .color(Pal.paper.color(0.06 + 0.12 * s.2)))
+            let drift = s.1 - t * 6 * s.2
+            p.rect(s.0, drift.truncatingRemainder(dividingBy: 1920) + (drift < 0 ? 1920 : 0), 2, 2, Pal.paper.c(0.06 + 0.12 * s.2))
         }
         // Each chapter fades in and out, so the cuts are soft.
         let fade = min(1, local / 0.55) * (index == Self.starts.count - 1 ? 1 : min(1, (span - local) / 0.45))
-        var layer = g
-        layer.opacity = max(0, min(1, fade))
+        p.save()
+        p.opacity = max(0, min(1, fade))
         switch index {
-        case 0: title(&layer, local)
-        case 1: numbers(&layer, local)
-        case 2: closest(&layer, local)
-        case 3: busiest(&layer, local)
-        case 4: spotlight(&layer, local)
-        default: close(&layer, local, span)
+        case 0: title(p, local)
+        case 1: numbers(p, local)
+        case 2: closest(p, local)
+        case 3: busiest(p, local)
+        case 4: spotlight(p, local)
+        default: close(p, local, span)
         }
+        p.restore()
         // The same quiet marks on every frame.
-        g.label("MY YEAR · \(script.year)", at: pt(540, 120), font: sans(26, .medium), color: Pal.quiet.color(), tracking: 4)
-        g.label("FRIEND GRAPH", at: pt(540, 1820), font: sans(24), color: Pal.quiet.color(0.8), tracking: 5)
+        p.text("MY YEAR · \(script.year)", 540, 120, .sans(26, .medium, tracking: 4), Pal.quiet.c())
+        p.text("FRIEND GRAPH", 540, 1820, .sans(24, tracking: 5), Pal.quiet.c(0.8))
         // The last second fades to black.
         let out = max(0, min(1, (t - (Self.length - 0.9)) / 0.9))
-        if out > 0 { g.fill(Path(CGRect(origin: .zero, size: Self.size)), with: .color(Pal.ground.color(out))) }
+        if out > 0 { p.rect(0, 0, 1080, 1920, Pal.ground.c(out)) }
     }
 
-    private func rings(_ g: inout GraphicsContext, x: Double, y: Double, scale: Double, drawn: Double, t: Double) {
-        var light = g
-        light.blendMode = .plusLighter
-        light.glow(x, y, 330 * scale, Pal.amber, 0.16)
+    private func rings(_ p: Painter, x: Double, y: Double, scale: Double, drawn: Double, t: Double) {
+        p.additive = true
+        p.glow(x, y, 330 * scale, Pal.amber, 0.16)
+        p.additive = false
         for (i, colour) in [Pal.amber, Pal.rose, Pal.violet].enumerated() {
             let r = (95 + Double(i) * 62) * scale, sweep = TAU * ease(drawn - Double(i) * 0.22)
             guard sweep > 0.01 else { continue }
             let start = -Double.pi / 2 + t * (0.5 - Double(i) * 0.14)
-            g.stroke(arc(x, y, r, start, start + sweep), with: .color(colour.color(0.95)), style: StrokeStyle(lineWidth: (9 - Double(i) * 1.6) * scale, lineCap: .round))
+            p.ring(x, y, r, width: (9 - Double(i) * 1.6) * scale, colour.c(0.95), from: start, sweep: sweep, round: true)
             // a friend on each ring
             let a = start + sweep
-            g.fill(circle(x + cos(a) * r, y + sin(a) * r, (15 - Double(i) * 1.5) * scale), with: .color(Pal.ground.color()))
-            g.fill(circle(x + cos(a) * r, y + sin(a) * r, (11 - Double(i) * 1.5) * scale), with: .color(colour.color()))
+            p.disc(x + cos(a) * r, y + sin(a) * r, (15 - Double(i) * 1.5) * scale, Pal.ground.c())
+            p.disc(x + cos(a) * r, y + sin(a) * r, (11 - Double(i) * 1.5) * scale, colour.c())
         }
-        g.fill(circle(x, y, 34 * scale * ease(drawn * 2)), with: .color(Pal.core.color()))
+        p.disc(x, y, 34 * scale * ease(drawn * 2), Pal.core.c())
     }
 
-    private func title(_ g: inout GraphicsContext, _ u: Double) {
-        rings(&g, x: 540, y: 700, scale: 1.25, drawn: u / 1.6, t: u)
-        var text = g
-        text.opacity = ease((u - 1.1) / 0.5)
-        text.label("My year", at: pt(540, 1180), font: serif(170), color: Pal.paper.color())
-        var sub = g
-        sub.opacity = ease((u - 2.0) / 0.5)
+    private func title(_ p: Painter, _ u: Double) {
+        rings(p, x: 540, y: 700, scale: 1.25, drawn: u / 1.6, t: u)
+        p.save()
+        p.opacity *= ease((u - 1.1) / 0.5)
+        p.text("My year", 540, 1180, .serif(170), Pal.paper.c())
+        p.restore()
+        p.save()
+        p.opacity *= ease((u - 2.0) / 0.5)
         if script.word.isEmpty {
-            sub.label("and who was in it", at: pt(540, 1330), font: serif(58), color: Pal.soft.color())
+            p.text("and who was in it", 540, 1330, .serif(58), Pal.soft.c())
         } else {
-            sub.label("in a word", at: pt(540, 1318), font: sans(30), color: Pal.quiet.color(), tracking: 4)
-            sub.label(script.word, at: pt(540, 1420), font: serif(110), color: Pal.amber.color())
+            p.text("in a word", 540, 1318, .sans(30, tracking: 4), Pal.quiet.c())
+            p.text(script.word, 540, 1420, .serif(110), Pal.amber.c())
         }
+        p.restore()
     }
 
-    private func numbers(_ g: inout GraphicsContext, _ u: Double) {
+    private func numbers(_ p: Painter, _ u: Double) {
         let colours = [Pal.amber, Pal.rose, Pal.violet]
         for (i, item) in script.numbers.prefix(3).enumerated() {
             let appear = (u - Double(i) * 0.7) / 0.6
             guard appear > 0 else { continue }
-            var row = g
-            row.opacity = ease(appear)
+            p.save()
+            p.opacity *= ease(appear)
             let y = 470 + Double(i) * 390 + (1 - ease(appear)) * 40
             let shown = Int((Double(item.value) * ease((u - Double(i) * 0.7) / 1.5)).rounded())
             let landed = u - Double(i) * 0.7 - 1.5, pop = landed > 0 ? 1 + 0.07 * exp(-landed * 7) : 1       // a small bump as the count settles, on its note
-            row.label(shown.formatted(), at: pt(540, y), font: serif(210 * pop), color: colours[i].color())
-            row.label(item.label, at: pt(540, y + 150), font: sans(40), color: Pal.soft.color())
+            p.save(); p.translate(540, y); p.scale(pop)
+            p.text(shown.formatted(), 0, 0, .serif(210), colours[i].c())
+            p.restore()
+            p.text(item.label, 540, y + 150, .sans(40), Pal.soft.c())
+            p.restore()
         }
     }
 
-    private func picture(_ g: inout GraphicsContext, _ scene: any VisualScene, top: Double, width: Double) {
-        var sub = g
+    private func picture(_ p: Painter, _ scene: any VisualScene, top: Double, width: Double) {
+        p.save()
         let scale = width / scene.designSize.width
-        sub.translateBy(x: (1080 - width) / 2, y: top)
-        sub.scaleBy(x: scale, y: scale)
-        sub.clip(to: Path(CGRect(origin: .zero, size: scene.designSize)))
-        scene.draw(&sub, options)
+        p.translate((1080 - width) / 2, top)
+        p.scale(scale)
+        p.clip(CGRect(origin: .zero, size: scene.designSize))
+        scene.paint(p, options)
+        p.restore()
     }
 
-    private func caption(_ g: inout GraphicsContext, _ text: String, y: Double, after u: Double) {
+    private func caption(_ p: Painter, _ text: String, y: Double, after u: Double) {
         guard !text.isEmpty else { return }
-        var layer = g
-        layer.opacity = ease(u / 0.8)
-        words(&layer, text, y: y + (1 - ease(u / 0.8)) * 30, font: serif(60), color: Pal.paper.color())
+        p.save()
+        p.opacity *= ease(u / 0.8)
+        words(p, text, y: y + (1 - ease(u / 0.8)) * 30, style: .serif(60), colour: Pal.paper.c())
+        p.restore()
     }
 
-    private func closest(_ g: inout GraphicsContext, _ u: Double) {
-        g.label("THE PEOPLE CLOSEST TO ME", at: pt(540, 250), font: sans(30, .medium), color: Pal.amber.color(), tracking: 5)
-        if let circleScene { picture(&g, circleScene, top: 300, width: 1060) }
-        caption(&g, captions[2], y: 1420, after: u - Self.captionDelay(arrivals))
+    private func closest(_ p: Painter, _ u: Double) {
+        p.text("THE PEOPLE CLOSEST TO ME", 540, 250, .sans(30, .medium, tracking: 5), Pal.amber.c())
+        if let circleScene { picture(p, circleScene, top: 300, width: 1060) }
+        caption(p, captions[2], y: 1420, after: u - Self.captionDelay(arrivals))
     }
 
-    private func busiest(_ g: inout GraphicsContext, _ u: Double) {
-        g.label("WEEK BY WEEK", at: pt(540, 250), font: sans(30, .medium), color: Pal.rose.color(), tracking: 5)
-        if let year { picture(&g, year, top: 350, width: 1060) }
-        caption(&g, captions[3], y: 1400, after: u - 3.0)
+    private func busiest(_ p: Painter, _ u: Double) {
+        p.text("WEEK BY WEEK", 540, 250, .sans(30, .medium, tracking: 5), Pal.rose.c())
+        if let year { picture(p, year, top: 350, width: 1060) }
+        caption(p, captions[3], y: 1400, after: u - 3.0)
     }
 
-    private func spotlight(_ g: inout GraphicsContext, _ u: Double) {
+    private func spotlight(_ p: Painter, _ u: Double) {
         guard let face else { return }
         let colour = face.standing == .inMemory ? Pal.memory : Pal.amber, x = 540.0, y = 640.0, r = 200.0 * (0.9 + 0.1 * ease(u / 0.9))
-        g.label(script.thanking ? "THANK YOU" : "CLOSEST OF ALL", at: pt(540, 250), font: sans(30, .medium), color: colour.color(), tracking: 5)
-        var light = g
-        light.blendMode = .plusLighter
-        light.glow(x, y, r + 150, colour, 0.22 + 0.04 * sin(u * 2))
-        if options.photos, let image = face.image {
-            var clipped = g
-            clipped.clip(to: circle(x, y, r))
-            clipped.draw(image, in: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r))
-        } else {
-            g.fill(circle(x, y, r), with: .color(colour.color(0.16)))
-            g.figure(x, y, r, colour, alpha: 0.75)
-        }
-        g.stroke(circle(x, y, r + 14), with: .color(colour.color(0.9)), lineWidth: 5)
+        p.text(script.thanking ? "THANK YOU" : "CLOSEST OF ALL", 540, 250, .sans(30, .medium, tracking: 5), colour.c())
+        p.additive = true
+        p.glow(x, y, r + 150, colour, 0.22 + 0.04 * sin(u * 2))
+        p.additive = false
+        p.portrait(face, x: x, y: y, r: r, colour: colour, options: options)
+        p.ring(x, y, r + 14, width: 5, colour.c(0.9))
         // messages circling in
+        p.additive = true
         for k in 0..<5 {
             let a = u * 0.9 + Double(k) * TAU / 5
-            light.glow(x + cos(a) * (r + 14), y + sin(a) * (r + 14), 16, RGB(255, 240, 215), 0.9)
+            p.glow(x + cos(a) * (r + 14), y + sin(a) * (r + 14), 16, RGB(255, 240, 215), 0.9)
         }
+        p.additive = false
         if let name = face.label(options.names == .full ? .full : .first) {
             // Full names can be long, so the size steps down to keep them on one line.
-            g.label(name, at: pt(540, 965), font: serif(name.count > 16 ? 76 : name.count > 11 ? 96 : 120), color: Pal.paper.color())
+            p.text(name, 540, 965, .serif(name.count > 16 ? 76 : name.count > 11 ? 96 : 120), Pal.paper.c())
         }
         for (i, line) in script.personLines.enumerated() {
-            var row = g
-            row.opacity = ease((u - 0.9 - Double(i) * 0.45) / 0.6)
-            row.label(line, at: pt(540, 1100 + Double(i) * 66), font: sans(40), color: Pal.soft.color())
+            p.save()
+            p.opacity *= ease((u - 0.9 - Double(i) * 0.45) / 0.6)
+            p.text(line, 540, 1100 + Double(i) * 66, .sans(40), Pal.soft.c())
+            p.restore()
         }
-        caption(&g, captions[4], y: 1380, after: u - 2.4)
+        caption(p, captions[4], y: 1380, after: u - 2.4)
     }
 
-    private func close(_ g: inout GraphicsContext, _ u: Double, _ span: Double) {
+    private func close(_ p: Painter, _ u: Double, _ span: Double) {
         if let closing {
-            var dim = g
-            dim.opacity = 0.55
-            picture(&dim, closing, top: 300, width: 1060)
+            p.save()
+            picture(p, closing, top: 300, width: 1060)
+            p.restore()
+            p.rect(0, 280, 1080, 1100, Pal.ground.c(0.45))          // sit the circle back behind the words
         }
         // The owner's own words first, if they gave us some, then the sign-off.
         let quoteTime = script.moment.isEmpty ? 0 : 2.6
+        p.save()
         if u < quoteTime {
-            var layer = g
-            layer.opacity = min(1, u / 0.6) * min(1, (quoteTime - u) / 0.5)
-            layer.label("THE BEST OF IT", at: pt(540, 1400), font: sans(28, .medium), color: Pal.amber.color(), tracking: 5)
-            words(&layer, "“" + script.moment + "”", y: 1450, font: serif(62), color: Pal.paper.color())
+            p.opacity *= min(1, u / 0.6) * min(1, (quoteTime - u) / 0.5)
+            p.text("THE BEST OF IT", 540, 1400, .sans(28, .medium, tracking: 5), Pal.amber.c())
+            words(p, "“" + script.moment + "”", y: 1450, style: .serif(62), colour: Pal.paper.c())
         } else {
-            var layer = g
-            layer.opacity = ease((u - quoteTime - 0.35) / 0.6)
-            layer.label("That was my year.", at: pt(540, 1500), font: serif(96), color: Pal.paper.color())
+            p.opacity *= ease((u - quoteTime - 0.35) / 0.6)
+            p.text("That was my year.", 540, 1500, .serif(96), Pal.paper.c())
         }
+        p.restore()
     }
 }
