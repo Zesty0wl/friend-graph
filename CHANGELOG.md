@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.0 (10 November 2026)
+
+### My Film
+- A 30 second film of your year in six chapters, tall for stories, with music made by the app. Three optional questions first: a word for the year, someone to thank, and the best moment.
+- The music follows the picture: a note plays as each number, person and line appears.
+- Captions are written on device by Apple Intelligence from your own figures, with the same checks as the side panel.
+- Everyone in the film is named, by first name where space is tight, and never by initials alone. Someone with no photo is shown as a simple figure.
+
+### What my Mac knows
+- Each strand now carries macOS's own name for it, written along the strand.
+
+### Lighter on your Mac
+- Pictures stop animating while another app is in front.
+- Each picture redraws only as often as it needs to. "What my Mac knows" uses about a tenth of the processor time it did.
+
+### Fixes
+- Requests to the on-device model give up after a few seconds, so a stall can never hold up the app.
+- Two exports at the same time no longer overwrite each other's files.
+- Contact photos are matched by phone number and address as well as by name.
+
 ## 0.1 (10 November 2026)
 
 First release.

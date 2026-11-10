@@ -13,6 +13,8 @@ Your Mac keeps a record of who you talk to, how often, and how quickly you each 
 - **Week by week**: a year of conversation, one line per person.
 - **What my Mac knows**: everything macOS keeps up to date about you, and how much each part holds.
 
+It can also make **My Film**: a 30 second film of your year, with music, ready to share.
+
 A panel beside each picture pulls out the facts worth knowing, with a short note written on your Mac by Apple Intelligence.
 
 | | |

@@ -31,6 +31,7 @@ final class YearScene: VisualScene {
     }
 
     var footer: String { "53 weeks of one-to-one messages" }
+    var framesPerSecond: Double { time < 3.2 ? 60 : 15 }      // still, once the ribbons have swept in
     var detailKey: String { hovered.map { "row\($0)" } ?? "none" }
     var selectedPersonID: String? { hovered.map { people[$0].id } }
     var detail: Detail? {
@@ -58,8 +59,10 @@ final class YearScene: VisualScene {
         for r in people.indices {
             let y = top + Double(r) * row, c = Pal.series[r % Pal.series.count]
             let dim = hovered != nil && hovered != r ? 0.35 : 1.0
-            let text = faces[r].label(options.names == .full ? .first : options.names) ?? String(r + 1)
-            g.label(text, at: pt(x0 - 14, y), font: sans(12), color: Pal.paper.color(0.85 * dim), anchor: .trailing)
+            let text = faces[r].label(options.everyoneNamed && options.names != .full ? .first : options.names) ?? String(r + 1)
+            // The margin holds about 13 characters at full size; longer names shrink a little, then lose their surname.
+            let shown = text.count > 19 ? faces[r].first : text
+            g.label(shown, at: pt(x0 - 14, y), font: sans(shown.count > 13 ? 9.5 : 12), color: Pal.paper.color(0.85 * dim), anchor: .trailing)
             var line = Path(); line.move(to: pt(x0, y)); line.addLine(to: pt(x1, y))
             g.stroke(line, with: .color(c.color(0.16)), lineWidth: 1)
 

@@ -3,8 +3,10 @@ import SwiftUI
 /// What my Mac is working out about me: every strand is one thing macOS keeps up to date.
 /// Longer strands draw on more sources, brighter ones ran more recently.
 final class IrisScene: VisualScene {
-    let designSize = CGSize(width: 600, height: 600)
-    private let cx = 300.0, cy = 300.0, pupil = 50.0, reach = 196.0
+    let designSize = CGSize(width: 820, height: 820)
+    private let cx = 410.0, cy = 410.0, pupil = 50.0, reach = 196.0
+    /// Strand names stop here, so the group labels beyond them stay clear.
+    private let nameLimit = 352.0
 
     private struct Strand {
         var view: WatchView
@@ -22,6 +24,8 @@ final class IrisScene: VisualScene {
     private var dragging = false, lastAngle = 0.0, lastTime = 0.0, moved = 0.0
     private var time = 0.0
     private let mostRows: Double
+    private var namesPicture: Image?
+    private var namesRotation = 0.0
 
     init(_ data: WatchData) {
         self.data = data
@@ -47,7 +51,7 @@ final class IrisScene: VisualScene {
 
     private func pick(_ p: CGPoint) -> Int? {
         let x = p.x - cx, y = p.y - cy, r = hypot(x, y)
-        guard r >= pupil - 4, r <= reach + 30 else { return nil }
+        guard r >= pupil - 4, r <= nameLimit + 6 else { return nil }
         let angle = atan2(y, x) - rotation
         var best: Int?, closest = 0.06
         for (i, s) in strands.enumerated() {
@@ -86,6 +90,7 @@ final class IrisScene: VisualScene {
     func select(named name: String) { pinned = strands.firstIndex { $0.view.name == name } }
 
     var footer: String { "Plain descriptions are read from Apple's internal names. Apple documents none of this." }
+    var framesPerSecond: Double { dragging || selected != nil ? 60 : 30 }
     var detailKey: String { selected.map { strands[$0].view.name } ?? "none" }
 
     var detail: Detail? {
@@ -138,9 +143,25 @@ final class IrisScene: VisualScene {
         }
     }
 
+    /// One strand's name, written along the strand from just beyond its tip.
+    private static func name(_ g: inout GraphicsContext, _ s: Strand, rotation: Double, around centre: Double, bright: Bool) {
+        let pupil = 50.0, reach = 196.0, limit = 352.0
+        let angle = rotation + s.angle + (bright ? s.offset : 0), r1 = pupil + 8, start = r1 + (reach - r1) * s.length + (bright ? 18 : 0) + 9
+        let room = Int((limit - start) / 4.15)
+        guard room > 4 else { return }
+        let name = s.view.name.count > room ? String(s.view.name.prefix(room - 1)) + "…" : s.view.name
+        let c = Pal.categories[min(s.view.cat, Pal.categories.count - 1)], flipped = cos(angle) < 0
+        var along = g
+        along.translateBy(x: centre + cos(angle) * start, y: centre + sin(angle) * start)
+        along.rotate(by: .radians(flipped ? angle + .pi : angle))
+        along.draw(Text(name).font(.system(size: 7.6, weight: bright ? .semibold : .regular))
+            .foregroundStyle(RGB.mix(c, Pal.paper, bright ? 0.5 : 0.35).color(bright ? 1 : s.view.rows == 0 ? 0.5 : 0.82)),
+                   at: .zero, anchor: flipped ? .trailing : .leading)
+    }
+
     func draw(_ g: inout GraphicsContext, _ options: DrawOptions) {
         let sel = selected
-        g.fill(Path(CGRect(x: 0, y: 0, width: 600, height: 600)), with: .color(Pal.ground.color()))
+        g.fill(Path(CGRect(x: 0, y: 0, width: 820, height: 820)), with: .color(Pal.ground.color()))
         let pr = pupil + sin(time * 0.55) * 3 + (sel != nil ? 5 : 0), r1 = pr + 8
         g.fill(circle(cx, cy, reach + 10), with: .radialGradient(Gradient(stops: [
             .init(color: Pal.amber.color(0.16), location: 0), .init(color: RGB(79, 214, 224).color(0.07), location: 0.35),
@@ -174,6 +195,33 @@ final class IrisScene: VisualScene {
                 light.fill(circle(b.x, b.y, size + s.emphasis * 2.5), with: .color(c.color(tip)))
             }
         }
+        // macOS's own name for each strand, written along it from the tip outwards. Drawing a hundred
+        // rotated names every frame is the most expensive thing in the app, so they are drawn once
+        // into a picture, which is then simply turned with the iris. It is redrawn only when the
+        // iris has turned far enough that some names need flipping to stay the right way up.
+        if namesPicture == nil || abs(rotation - namesRotation) > 0.3 {
+            namesRotation = rotation
+            let snapshot = strands, turned = rotation
+            namesPicture = MainActor.assumeIsolated {
+                let renderer = ImageRenderer(content: Canvas { context, _ in
+                    for s in snapshot { Self.name(&context, s, rotation: turned, around: 410, bright: false) }
+                }.frame(width: 820, height: 820))
+                renderer.scale = 2.5
+                return renderer.cgImage.map { Image(decorative: $0, scale: 2.5) }
+            }
+        }
+        if let picture = namesPicture {
+            var ring = g
+            ring.opacity = sel == nil ? 1 : 0.3
+            ring.translateBy(x: cx, y: cy)
+            ring.rotate(by: .radians(rotation - namesRotation))
+            ring.draw(picture, in: CGRect(x: -410, y: -410, width: 820, height: 820))
+        }
+        if let chosen = sel {
+            var top = g
+            top.translateBy(x: cx - 410, y: cy - 410)
+            Self.name(&top, strands[chosen], rotation: rotation, around: 410, bright: true)
+        }
         g.fill(circle(cx, cy, pr), with: .color(RGB(2, 2, 4).color()))
         g.fill(circle(cx - 22, cy - 26, 24), with: .radialGradient(Gradient(stops: [
             .init(color: Color.white.opacity(0.8), location: 0), .init(color: Color.white.opacity(0.16), location: 0.35),
@@ -186,9 +234,9 @@ final class IrisScene: VisualScene {
             let on = sel.map { strands[$0].view.cat == cat } ?? false
             let anchor: UnitPoint = co > 0.35 ? .leading : co < -0.35 ? .trailing : .center
             let text = "\(data.cats[min(cat, data.cats.count - 1)]) \(angles.count)", approx = Double(text.count) * 6.2
-            var x = cx + co * (reach + 30)
-            if anchor == .leading { x = min(x, 590 - approx) } else if anchor == .trailing { x = max(x, 10 + approx) } else { x = max(10 + approx / 2, min(590 - approx / 2, x)) }
-            g.label(text, at: pt(x, cy + sin(angle) * (reach + 30)), font: sans(11),
+            var x = cx + co * (nameLimit + 14)
+            if anchor == .leading { x = min(x, 812 - approx) } else if anchor == .trailing { x = max(x, 8 + approx) } else { x = max(8 + approx / 2, min(812 - approx / 2, x)) }
+            g.label(text, at: pt(x, max(14, min(806, cy + sin(angle) * (nameLimit + 22)))), font: sans(12, .medium),
                     color: Pal.categories[min(cat, Pal.categories.count - 1)].color(sel != nil && !on ? 0.45 : 1), anchor: anchor)
         }
     }

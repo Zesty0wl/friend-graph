@@ -24,6 +24,7 @@ final class AppModel {
     var tab: Tab = .circle
     var progress = "Getting ready"
     var showShare = false
+    var showFilm = false
     /// Bumped whenever the people on screen change, so pictures are rebuilt.
     var revision = 0
 

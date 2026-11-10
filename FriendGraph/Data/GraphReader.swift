@@ -64,6 +64,7 @@ enum GraphReader {
         // ---- Names from Contacts and WhatsApp, by handle
         progress("Reading names")
         var extra: [String: String] = [:]
+        var cardPhotos: [String: Data] = [:]
         let books = addressBooks()
         let waContacts = Database(whatsApp + "/ContactsV2.sqlite")
         var waIDs: [String: String] = [:]           // WhatsApp's private id or number, before the @ -> phone number
@@ -77,11 +78,13 @@ enum GraphReader {
         }
         for book in books {
             for (table, column) in [("ZABCDPHONENUMBER", "ZFULLNUMBER"), ("ZABCDEMAILADDRESS", "ZADDRESS")] {
-                book.each("SELECT r.ZFIRSTNAME, r.ZLASTNAME, t.\(column) FROM \(table) t JOIN ZABCDRECORD r ON r.Z_PK = t.ZOWNER WHERE t.\(column) IS NOT NULL") { r in
-                    let name = [r[0].string, r[1].string].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
-                    guard !name.isEmpty, let value = r[2].string else { return }
+                book.each("SELECT r.ZFIRSTNAME, r.ZLASTNAME, t.\(column), r.ZTHUMBNAILIMAGEDATA FROM \(table) t JOIN ZABCDRECORD r ON r.Z_PK = t.ZOWNER WHERE t.\(column) IS NOT NULL") { r in
+                    guard let value = r[2].string else { return }
                     let key = Handle.key(value.contains("@") ? value : Handle.phone(value))
-                    if extra[key] == nil { extra[key] = name }
+                    // The photo on the card this number or address belongs to, whatever the card is called.
+                    if cardPhotos[key] == nil, let blob = r[3].data, let image = jpeg(in: blob) { cardPhotos[key] = image }
+                    let name = [r[0].string, r[1].string].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+                    if !name.isEmpty, extra[key] == nil { extra[key] = name }
                 }
             }
         }
@@ -355,7 +358,8 @@ enum GraphReader {
             let phone = waIDs[id] ?? (jid.hasSuffix("@s.whatsapp.net") ? "+" + id : nil)
             if let phone { waPictures[whoIs(phone), default: []].append(path) }
         }
-        func photo(name: String, key: String) -> Data? {
+        func photo(name: String, key: String, handles: Set<String> = []) -> Data? {
+            for handle in handles.sorted() { if let image = cardPhotos[Handle.key(handle)] { return image } }
             let parts = name.replacingOccurrences(of: "~", with: "").split(separator: " ").map { $0.lowercased() }
             if parts.count >= 2 {
                 for book in books {
@@ -387,7 +391,7 @@ enum GraphReader {
             let name = tally.top.map { $0.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ") }
                 ?? pretty[key] ?? row.handles.sorted().first ?? "Unknown"
             var p = Person(id: key, name: name)
-            p.photo = photo(name: name, key: key)
+            p.photo = photo(name: name, key: key, handles: row.handles)
             p.familySharing = row.family
             p.guess = guess(row.key, family: row.family)
             p.score = row.score

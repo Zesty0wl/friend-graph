@@ -8,6 +8,7 @@ struct SceneCanvas: View {
     var onInteraction: () -> Void = {}
 
     @State private var pressed = false
+@Environment(\.controlActiveState) private var activity
 
     var body: some View {
         GeometryReader { geo in
@@ -15,8 +16,9 @@ struct SceneCanvas: View {
             let scale = min(geo.size.width / design.width, geo.size.height / design.height)
             let origin = CGPoint(x: (geo.size.width - design.width * scale) / 2, y: (geo.size.height - design.height * scale) / 2)
             let toDesign: (CGPoint) -> CGPoint = { p in CGPoint(x: (p.x - origin.x) / scale, y: (p.y - origin.y) / scale) }
-            TimelineView(.animation) { timeline in
-                Canvas { context, size in
+            // Redraw no faster than the picture needs, and not at all while another app is in front.
+            TimelineView(.animation(minimumInterval: 1.0 / scene.framesPerSecond, paused: activity == .inactive)) { timeline in
+                Canvas(opaque: true) { context, size in
                     context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Pal.ground.color()))
                     let stepper = FrameStepper.shared
                     scene.advance(by: stepper.step(for: ObjectIdentifier(scene), at: timeline.date))

@@ -51,7 +51,9 @@ final class CircleScene: VisualScene {
     private let totalWeight: Double
     private let onRing: (String, Int) -> Void
 
-    init(people: [Person], decisions: Decisions, scoredCount: Int, othersKnown: Int, onRing: @escaping (String, Int) -> Void = { _, _ in }) {
+    /// `firstBirth` and `stagger` set when each person appears; the film slows them down so each arrival can land on a note.
+    init(people: [Person], decisions: Decisions, scoredCount: Int, othersKnown: Int, firstBirth: Double = 0.2, stagger: Double = 0.06,
+         onRing: @escaping (String, Int) -> Void = { _, _ in }) {
         self.scoredCount = scoredCount
         self.othersKnown = othersKnown
         self.onRing = onRing
@@ -69,7 +71,7 @@ final class CircleScene: VisualScene {
             let a = Double(inTier) / Double(n) * TAU + Double(tier) * 0.5 + 0.55
             let phase = random.next() * TAU, curl = (random.next() - 0.5) * 0.22
             bodies.append(Body(face: Face(p, decisions), person: p, rank: k, home: home, x: cx + cos(a) * 24, y: cy + sin(a) * 24,
-                               phase: phase, born: 0.2 + Double(k) * 0.06, curl: curl, lastAngle: a))
+                               phase: phase, born: firstBirth + Double(k) * stagger, curl: curl, lastAngle: a))
         }
         maxMessages = Double(max(1, bodies.map { $0.person.messages }.max() ?? 1))
         totalWeight = bodies.filter { !$0.memory }.reduce(0) { $0 + sqrt(Double($1.person.messages)) }
@@ -376,14 +378,15 @@ final class CircleScene: VisualScene {
             let b = bodies[i], r = b.radius * (1 + b.emphasis * 0.06), nameY = b.y + r + 15
             // With photos hidden and initials chosen, the disc already carries the initials.
             if options.names == .initials && (!options.photos || b.face.image == nil) { continue }
-            var visible = (r > 24 ? 1 : b.emphasis) * min(1, b.grow * 2) * (sel != nil && sel != i ? 0.4 : 1)
+            var visible = (r > 24 || options.everyoneNamed ? 1 : b.emphasis) * min(1, b.grow * 2) * (sel != nil && sel != i ? 0.4 : 1)
             for z in Self.zones where abs(nameY - (cy - z.r)) < 15 && abs(b.x - cx) < Double(z.label.count) * 4.4 + 30 {
                 visible *= b.emphasis            // never write a name across a ring's label
             }
-            guard visible > 0.03, let text = b.face.label(options.names) else { continue }
+            // Under a face there is only room for a first name.
+            guard visible > 0.03, let text = options.everyoneNamed ? b.face.first : b.face.label(options.names) else { continue }
             var layer = g
             layer.opacity = visible
-            layer.label(text, at: pt(b.x, b.y + r + 9), font: sans(12.5), color: Pal.paper.color(), anchor: .top, halo: Pal.ground.color())
+            layer.label(text, at: pt(b.x, b.y + r + 9), font: sans(r > 24 ? 12.5 : 11), color: Pal.paper.color(), anchor: .top, halo: Pal.ground.color())
         }
     }
 
@@ -404,7 +407,9 @@ final class CircleScene: VisualScene {
             clipped.draw(image, in: CGRect(x: b.x - r, y: b.y - r, width: 2 * r, height: 2 * r))
         } else {
             layer.fill(circle(b.x, b.y, r), with: .color(b.colour.color(0.16)))
-            if options.names != .none {
+            if options.everyoneNamed {
+                layer.figure(b.x, b.y, r, b.colour, alpha: 0.75)
+            } else if options.names != .none {
                 layer.label(b.face.initials, at: pt(b.x, b.y + r * 0.02), font: serif(r * 0.78), color: b.colour.color())
             }
         }

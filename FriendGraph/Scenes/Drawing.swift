@@ -58,6 +58,9 @@ enum NameStyle: String, CaseIterable, Identifiable {
 struct DrawOptions: Equatable {
     var names: NameStyle = .first
     var photos = true
+    /// The film's rule: everyone is named, and nobody is reduced to their initials. A person with no
+    /// photo gets a simple figure in their disc, with their first name beside it.
+    var everyoneNamed = false
 }
 
 /// What the side panel shows for whatever is under the pointer.
@@ -127,6 +130,8 @@ protocol VisualScene: AnyObject {
     /// The person under the pointer, if this picture is of people.
     var selectedPersonID: String? { get }
     var footer: String { get }
+    /// How often the live view redraws. Slow-moving pictures ask for less, which saves a great deal of work.
+    var framesPerSecond: Double { get }
 }
 
 extension VisualScene {
@@ -137,6 +142,7 @@ extension VisualScene {
     var detailKey: String { "" }
     var detail: Detail? { nil }
     var selectedPersonID: String? { nil }
+    var framesPerSecond: Double { 60 }
 }
 
 func pt(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: x, y: y) }
@@ -184,5 +190,15 @@ extension GraphicsContext {
 
     func glow(_ x: Double, _ y: Double, _ r: Double, _ c: RGB, _ alpha: Double) {
         fill(circle(x, y, r), with: .radialGradient(Gradient(colors: [c.color(alpha), c.color(0)]), center: pt(x, y), startRadius: 0, endRadius: r))
+    }
+}
+
+extension GraphicsContext {
+    /// A plain head-and-shoulders figure inside a disc, for someone with no photo.
+    func figure(_ x: Double, _ y: Double, _ r: Double, _ colour: RGB, alpha: Double = 1) {
+        var inside = self
+        inside.clip(to: circle(x, y, r))
+        inside.fill(circle(x, y - r * 0.2, r * 0.3), with: .color(colour.color(alpha)))
+        inside.fill(Path(ellipseIn: CGRect(x: x - r * 0.56, y: y + r * 0.22, width: r * 1.12, height: r * 1.3)), with: .color(colour.color(alpha)))
     }
 }

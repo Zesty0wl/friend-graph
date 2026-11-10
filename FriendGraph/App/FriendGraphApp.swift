@@ -24,6 +24,9 @@ struct FriendGraphApp: App {
                         .disabled(model.phase != .main)
                 }
                 Divider()
+                Button("Make My Film…") { model.showFilm = true }
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                    .disabled(model.phase != .main)
                 Button("Share…") { model.showShare = true }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(model.phase != .main)
@@ -93,6 +96,7 @@ struct RootView: View {
                 if args.contains("--main") { model.confirm(model.decisions) }
                 if let at = args.firstIndex(of: "--tab"), at + 1 < args.count, let tab = Tab(rawValue: args[at + 1]) { model.tab = tab }
                 if args.contains("--share") { model.showShare = true }
+                if args.contains("--film-sheet") { model.showFilm = true }
             } else if UserDefaults.standard.bool(forKey: "hasStarted"), GraphReader.hasAccess() {
                 model.read()        // returning owner: straight to their pictures
             }

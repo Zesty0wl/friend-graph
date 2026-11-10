@@ -78,10 +78,20 @@ enum Exporter {
 
     static func temporaryURL(_ request: Request, video: Bool) -> URL {
         let name = SceneBuilder.title(request.tab).replacingOccurrences(of: ",", with: "")
-        return FileManager.default.temporaryDirectory.appendingPathComponent(name).appendingPathExtension(video ? "mp4" : "png")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("FriendGraph-" + UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.appendingPathComponent(name).appendingPathExtension(video ? "mp4" : "png")
     }
 
-    enum Failure: Error { case nothingToDraw, writer(String) }
+    enum Failure: LocalizedError {
+        case nothingToDraw, writer(String)
+        var errorDescription: String? {
+            switch self {
+            case .nothingToDraw: return "There was nothing to draw."
+            case .writer(let why): return why
+            }
+        }
+    }
 
     /// Ten seconds at 30 frames a second. Reports progress from 0 to 1.
     static func video(_ request: Request, model: AppModel, seconds: Double = 10, progress: @escaping (Double) -> Void) async throws -> URL {
@@ -128,6 +138,112 @@ enum Exporter {
         await writer.finishWriting()
         if writer.status != .completed { throw Failure.writer(writer.error?.localizedDescription ?? "did not finish") }
         return url
+    }
+}
+
+extension Exporter {
+    /// Encodes frames drawn one at a time into an H.264 file.
+    static func encode(size: CGSize, frames: Int, fps: Int, to url: URL, progress: @escaping (Double) -> Void, frame: (Int) -> CGImage?) async throws {
+        try? FileManager.default.removeItem(at: url)
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(size.width), AVVideoHeightKey: Int(size.height),
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 10_000_000],
+        ])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: Int(size.width), kCVPixelBufferHeightKey as String: Int(size.height),
+        ])
+        writer.add(input)
+        guard writer.startWriting() else { throw Failure.writer(writer.error?.localizedDescription ?? "could not start") }
+        writer.startSession(atSourceTime: .zero)
+        for index in 0..<frames {
+            try Task.checkCancellation()
+            guard let image = frame(index), let pool = adaptor.pixelBufferPool else { throw Failure.nothingToDraw }
+            var made: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made)
+            guard let buffer = made else { throw Failure.writer("no frame buffer") }
+            CVPixelBufferLockBaseAddress(buffer, [])
+            if let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: Int(size.width), height: Int(size.height),
+                                       bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                       bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
+                context.draw(image, in: CGRect(origin: .zero, size: size))
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(4)) }
+            adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps)))
+            progress(Double(index + 1) / Double(frames))
+            await Task.yield()
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        if writer.status != .completed { throw Failure.writer(writer.error?.localizedDescription ?? "did not finish") }
+    }
+
+    /// Puts the picture and the music into one file.
+    static func join(video: URL, audio: URL, into url: URL) async throws {
+        try? FileManager.default.removeItem(at: url)
+        let composition = AVMutableComposition()
+        // The picture file can take a moment to be finalised on disk after the writer reports it is done.
+        var picture = AVURLAsset(url: video), attempt = 0
+        while true {
+            do { _ = try await picture.load(.duration); break } catch {
+                attempt += 1
+                if attempt > 12 { throw error }
+                try await Task.sleep(for: .milliseconds(400))
+                picture = AVURLAsset(url: video)
+            }
+        }
+        let sound = AVURLAsset(url: audio)
+        let duration = try await picture.load(.duration)
+        guard let videoTrack = try await picture.loadTracks(withMediaType: .video).first,
+              let audioTrack = try await sound.loadTracks(withMediaType: .audio).first,
+              let videoOut = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
+              let audioOut = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw Failure.writer("could not read the film back") }
+        let range = CMTimeRange(start: .zero, duration: duration)
+        try videoOut.insertTimeRange(range, of: videoTrack, at: .zero)
+        try audioOut.insertTimeRange(range, of: audioTrack, at: .zero)
+        guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw Failure.writer("could not join sound and picture") }
+        try await session.export(to: url, as: .mp4)
+    }
+
+    /// Makes the whole "My year" film: captions, picture, music. Progress runs from 0 to 1.
+    static func film(model: AppModel, narrator: Narrator, answers: Film.Answers, options: DrawOptions, progress: @escaping (Double) -> Void) async throws -> URL {
+        let script = Film.script(model: model, answers: answers)
+        // Captions first: a sentence each for the three chapters that need one.
+        var captions = [String](repeating: "", count: Film.starts.count)
+        captions[2] = await narrator.caption(script.circleFacts)
+        progress(0.03)
+        captions[3] = await narrator.caption(script.yearFacts)
+        progress(0.06)
+        // Anyone in memory keeps our own plain words; no model writes about them.
+        let memory = script.person.map { model.decisions.standing(of: $0) == .inMemory } ?? false
+        captions[4] = memory ? "" : await narrator.caption(Array(script.personFacts.prefix(1)))
+        progress(0.09)
+
+        let film = Film(model: model, script: script, captions: captions, options: options)
+        // A folder of its own for every film, so two windows or two copies of the app can never write over each other.
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("FriendGraph-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let silent = base.appendingPathComponent("picture.mp4"), music = base.appendingPathComponent("music.m4a")
+        let final = base.appendingPathComponent("My year.mp4")
+        let frames = Int(Film.length) * Film.fps
+        try await encode(size: Film.size, frames: frames, fps: Film.fps, to: silent, progress: { progress(0.09 + 0.86 * $0) }) { _ in
+            film.advance(by: 1.0 / Double(Film.fps))
+            let renderer = ImageRenderer(content: Canvas { context, _ in film.draw(&context) }.frame(width: Film.size.width, height: Film.size.height))
+            renderer.scale = 1
+            renderer.isOpaque = true
+            return renderer.cgImage
+        }
+        do { try Soundtrack.write(starts: Film.starts, length: Film.length, cues: Film.cues(script: script, arrivals: film.arrivals), to: music) }
+        catch { throw Failure.writer("The music could not be made: \(error.localizedDescription)") }
+        do { try await join(video: silent, audio: music, into: final) }
+        catch { throw Failure.writer("The music could not be added to the picture: \(error.localizedDescription)") }
+        try? FileManager.default.removeItem(at: silent)
+        try? FileManager.default.removeItem(at: music)
+        progress(1)
+        return final
     }
 }
 
@@ -204,6 +320,20 @@ enum Snapshot {
                     report.append("wrote \(tab.rawValue).mp4")
                 } catch { report.append("video FAILED for \(tab.rawValue): \(error)") }
             }
+        }
+        // --film: the 30 second "My year" film, with stand-in answers. Made-up people only.
+        if CommandLine.arguments.contains("--film"), open {
+            do {
+                let started = Date()
+                let answers = Film.Answers(word: "Steady", thanks: model.circlePeople.dropFirst(4).first?.id, moment: "A week by the sea in June with everyone together")
+                let url = try await Exporter.film(model: model, narrator: narrator, answers: answers, options: DrawOptions(names: .full, photos: true, everyoneNamed: true)) { _ in }
+                let target = directory.appendingPathComponent("my-year.mp4")
+                try? FileManager.default.removeItem(at: target)
+                try FileManager.default.copyItem(at: url, to: target)
+                report.append("wrote my-year.mp4 in \(Int(Date().timeIntervalSince(started)))s")
+                let script = Film.script(model: model, answers: answers)
+                report.append("film captions: " + [await narrator.caption(script.circleFacts), await narrator.caption(script.yearFacts), await narrator.caption(script.personFacts)].joined(separator: " | "))
+            } catch { report.append("film FAILED: \(error)") }
         }
         if CommandLine.arguments.contains("--video") {
             do {

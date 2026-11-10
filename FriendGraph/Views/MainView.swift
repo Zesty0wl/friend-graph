@@ -82,6 +82,8 @@ struct MainView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button("Edit People") { model.phase = .confirm }
                     .help("Change who is in your pictures")
+                Button("My Film") { model.showFilm = true }
+                    .help("Make a 30 second film of your year")
                 Button("Share") { model.showShare = true }
                     .buttonStyle(PrimaryButtonStyle(large: false))
                     .disabled(scenes[model.tab] == nil)
@@ -89,6 +91,7 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $model.showShare) { ShareSheet(tab: model.tab).environment(model) }
+        .sheet(isPresented: $model.showFilm) { FilmSheet().environment(model) }
         .onAppear(perform: build)
         .onChange(of: model.revision) { build() }
         .onChange(of: model.tab) { detail = nil; personID = nil; detailKey = ""; if let s = scenes[model.tab] { footer = s.footer } }
